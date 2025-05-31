@@ -4,6 +4,9 @@ export interface User {
   id: string;
   name: string;
   email: string;
+  username?: string; // TAMBAHKAN: Karena API Django User model punya username
+  first_name?: string; // TAMBAHKAN: Untuk menyimpan nama depan dari API
+  last_name?: string; // TAMBAHKAN: Untuk menyimpan nama belakang dari API
   hasShop: boolean;
   shopId?: string;
   shop?: Shop; // Jika Anda memutuskan untuk menyematkan objek Shop

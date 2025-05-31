@@ -6,8 +6,8 @@ from django.contrib.auth.models import User
 from dj_rest_auth.registration.serializers import RegisterSerializer as DefaultRegisterSerializer
 
 class CustomRegisterSerializer(DefaultRegisterSerializer):
-    first_name = serializers.CharField(required=False) # Jadikan opsional atau required sesuai kebutuhan
-    last_name = serializers.CharField(required=False)
+    first_name = serializers.CharField(required=False, max_length=30, allow_blank=True) # Tambahkan allow_blank=True
+    last_name = serializers.CharField(required=False, max_length=30, allow_blank=True)  # Tambahkan allow_blank=True
 
     def custom_signup(self, request, user):
         user.first_name = self.validated_data.get('first_name', '')

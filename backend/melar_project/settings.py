@@ -29,11 +29,13 @@ INSTALLED_APPS = [
     'allauth',
     'allauth.account',
     'allauth.socialaccount',
+    'corsheaders', # Tambahkan ini'
 
     'melar_api.apps.MelarApiConfig',
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware', # Tambahkan ini di atas
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -174,3 +176,16 @@ if DEBUG:
 else:
     EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
     # ... (konfigurasi SMTP Anda) ...
+    
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173", # Ganti dengan port frontend Anda jika berbeda
+    "http://127.0.0.1:5173",
+]
+# Jika Anda ingin mengizinkan semua origin (tidak disarankan untuk produksi):
+# CORS_ALLOW_ALL_ORIGINS = True
+
+# Untuk mengizinkan pengiriman kredensial (seperti cookies atau header Authorization)
+CORS_ALLOW_CREDENTIALS = True
+
+# Anda mungkin juga perlu mengatur header yang diizinkan jika frontend mengirim header kustom
+# CORS_ALLOW_HEADERS = list(default_headers) + ['my-custom-header']
