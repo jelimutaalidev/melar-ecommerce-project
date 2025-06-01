@@ -4,15 +4,18 @@ from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.views import APIView # <-- Import APIView
 
 from .models import (
     UserProfile, Category, Shop, AppProduct,
-    ProductImage, ProductReview, RentalOrder, OrderItem # Pastikan OrderItem diimpor
+    ProductImage, ProductReview, RentalOrder, OrderItem,
+    Cart, CartItem  # <-- TAMBAHKAN Cart dan CartItem
 )
 from .serializers import (
     UserSerializer, UserProfileSerializer, CategorySerializer, ShopSerializer,
     AppProductSerializer, ProductImageSerializer, ProductReviewSerializer,
-    RentalOrderSerializer, OrderItemSerializer
+    RentalOrderSerializer, OrderItemSerializer,
+    CartSerializer, CartItemSerializer  # <-- TAMBAHKAN CartSerializer dan CartItemSerializer
 )
 # Mengimpor permission kustom yang telah kita buat
 from .permissions import (
@@ -42,15 +45,20 @@ class UserProfileViewSet(viewsets.ModelViewSet):
             return [permissions.IsAuthenticated(), IsOwnerOrReadOnly()]
         elif self.action == 'retrieve':
             return [permissions.IsAuthenticated(), IsOwnerOrReadOnly()]
-        return [permissions.IsAdminUser()]
+        return [permissions.IsAdminUser()] # Default untuk list dan create oleh admin
 
     def get_queryset(self):
         user = self.request.user
         if user.is_staff:
             return UserProfile.objects.all().select_related('user')
         if user.is_authenticated:
+            # User biasa hanya bisa lihat/edit profilnya sendiri
             return UserProfile.objects.filter(user=user).select_related('user')
         return UserProfile.objects.none()
+
+    # perform_create/update otomatis menangani user jika serializer di-setup dengan benar
+    # atau bisa dioverride jika ada logika khusus. Untuk UserProfile, OneToOne dengan User
+    # biasanya dihandle saat User dibuat via signal.
 
 class CategoryViewSet(viewsets.ModelViewSet):
     """
@@ -77,8 +85,7 @@ class ShopViewSet(viewsets.ModelViewSet):
             return [permissions.IsAuthenticated(), IsOwnerOrReadOnly()]
         elif self.action == 'create':
             return [permissions.IsAuthenticated()]
-        # Untuk 'products' dan 'orders' custom action, permission diatur di decorator @action
-        return [permissions.AllowAny()] # Default untuk list dan retrieve
+        return [permissions.AllowAny()]
 
     def perform_create(self, serializer):
         if hasattr(self.request.user, 'shop') and self.request.user.shop is not None:
@@ -91,27 +98,18 @@ class ShopViewSet(viewsets.ModelViewSet):
         products = AppProduct.objects.filter(shop=shop).select_related('category').prefetch_related('product_images')
         serializer = AppProductSerializer(products, many=True, context={'request': request})
         return Response(serializer.data)
-    
-    # PERBAIKAN/TAMBAHAN: Custom action untuk mengambil order berdasarkan shop_id
+
     @action(detail=True, methods=['get'], url_path='orders', permission_classes=[permissions.IsAuthenticated, IsOwnerOrReadOnly])
     def shop_orders(self, request, pk=None):
-        """
-        Returns a list of orders associated with this shop.
-        Only accessible by the shop owner or admin.
-        """
-        shop = self.get_object() # IsOwnerOrReadOnly akan dicek di sini
-        # Ambil semua order yang salah satu itemnya berasal dari produk di toko ini
+        shop = self.get_object()
         order_ids = OrderItem.objects.filter(product__shop=shop).values_list('order_id', flat=True).distinct()
         orders = RentalOrder.objects.filter(id__in=order_ids).select_related('user').prefetch_related('items', 'items__product').order_by('-created_at')
-        
         page = self.paginate_queryset(orders)
         if page is not None:
             serializer = RentalOrderSerializer(page, many=True, context={'request': request})
             return self.get_paginated_response(serializer.data)
-            
         serializer = RentalOrderSerializer(orders, many=True, context={'request': request})
         return Response(serializer.data)
-
 
 class AppProductViewSet(viewsets.ModelViewSet):
     """
@@ -130,14 +128,19 @@ class AppProductViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         shop_id_from_request = self.request.data.get('shop_id')
         if not shop_id_from_request:
-            raise ValidationError({"shop_id": "This field is required."})
+            # **PERUBAHAN DI SINI:** Langsung raise ValidationError jika shop_id tidak ada di payload
+            raise ValidationError({"shop_id": "This field is required in the request payload."})
+        
+        # Logika selanjutnya untuk memastikan user adalah pemilik shop_id yang diberikan
         try:
             shop = Shop.objects.get(id=shop_id_from_request, owner=self.request.user)
-            serializer.save(shop=shop)
         except Shop.DoesNotExist:
             raise PermissionDenied("You do not own this shop, the shop does not exist, or shop_id is incorrect.")
-        except ValueError:
-             raise ValidationError({"shop_id": "Invalid Shop ID format."})
+        except ValueError: 
+            raise ValidationError({"shop_id": "Invalid Shop ID format."})
+        
+        print(f"[AppProductViewSet DEBUG] Creating product for shop: {shop.name} (ID: {shop.id}) by user: {self.request.user.username}")
+        serializer.save(shop=shop)
 
 
 class ProductReviewViewSet(viewsets.ModelViewSet):
@@ -160,7 +163,6 @@ class ProductReviewViewSet(viewsets.ModelViewSet):
             raise ValidationError({"product": "Product ID is required."})
         try:
             product_instance = AppProduct.objects.get(id=product_id)
-            # Tambahan: Cek apakah user sudah pernah mereview produk ini
             if ProductReview.objects.filter(product=product_instance, user=self.request.user).exists():
                 raise ValidationError({"detail": "You have already reviewed this product."})
             serializer.save(user=self.request.user, product=product_instance)
@@ -178,7 +180,7 @@ class RentalOrderViewSet(viewsets.ModelViewSet):
     """
     API endpoint for rental orders.
     """
-    queryset = RentalOrder.objects.all().select_related('user').prefetch_related('items', 'items__product', 'items__product__product_images').order_by('-created_at')
+    queryset = RentalOrder.objects.all().select_related('user').prefetch_related('items', 'items__product', 'items__product__product_images', 'items__product__shop').order_by('-created_at')
     serializer_class = RentalOrderSerializer
 
     def get_permissions(self):
@@ -187,50 +189,37 @@ class RentalOrderViewSet(viewsets.ModelViewSet):
         elif self.action == 'create':
             return [permissions.IsAuthenticated()]
         elif self.action == 'list':
-            # Diperbarui: Izinkan pengguna terautentikasi untuk list, logika filter ada di get_queryset
-            return [permissions.IsAuthenticated()]
-        return [permissions.IsAuthenticated()]
+            return [permissions.IsAuthenticated()] # Filter di get_queryset
+        return [permissions.IsAuthenticated()] # Default permission
 
     def get_queryset(self):
         user = self.request.user
-        # Ambil queryset dasar dari kelas induk atau definisikan di sini
-        # queryset = super().get_queryset() # Jika queryset sudah didefinisikan di atas
-        queryset = RentalOrder.objects.all().select_related('user').prefetch_related(
-            'items', 'items__product', 'items__product__shop', 'items__product__product_images' # Tambahkan items__product__shop
-        ).order_by('-created_at')
-
+        queryset = super().get_queryset() # Menggunakan queryset yang sudah didefinisikan di atas
 
         if not user.is_authenticated:
-            return RentalOrder.objects.none()
+            return queryset.none()
 
-        if user.is_staff: # Admin bisa lihat semua, atau filter jika ada shop_id
+        if user.is_staff:
             shop_id_param = self.request.query_params.get('shop_id')
             if shop_id_param:
                 order_ids = OrderItem.objects.filter(product__shop_id=shop_id_param).values_list('order_id', flat=True).distinct()
                 return queryset.filter(id__in=order_ids)
             return queryset
         
-        # Untuk non-admin (user biasa atau pemilik toko)
         shop_id_param = self.request.query_params.get('shop_id')
         if shop_id_param:
-            # Jika parameter shop_id ada, cek apakah user adalah pemilik toko tersebut
             if hasattr(user, 'shop') and user.shop and str(user.shop.id) == str(shop_id_param):
-                # Pemilik toko mengambil semua order yang itemnya terkait dengan produk di tokonya
                 order_ids = OrderItem.objects.filter(product__shop_id=user.shop.id).values_list('order_id', flat=True).distinct()
                 return queryset.filter(id__in=order_ids)
             else:
-                # Jika shop_id_param ada tapi user bukan pemilik toko itu, jangan kembalikan apa-apa (atau 403 jika lebih sesuai)
-                # Untuk konsistensi, jika user mencoba mengakses shop_id yang bukan miliknya, kembalikan empty queryset.
-                # Permission lebih ketat bisa dihandle di level permission class jika endpointnya spesifik per shop.
-                return RentalOrder.objects.none()
+                return queryset.none()
         else:
-            # Jika tidak ada parameter shop_id, user biasa hanya bisa lihat order yang dia buat (rental history)
-            return queryset.filter(user=user)
+            return queryset.filter(user=user) # User biasa hanya lihat ordernya
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
 
-    @action(detail=True, methods=['post'], url_path='cancel-order')
+    @action(detail=True, methods=['post'], url_path='cancel-order', permission_classes=[permissions.IsAuthenticated, IsOrderOwner])
     def cancel_order(self, request, pk=None):
         order = self.get_object()
         if order.status not in ['pending', 'confirmed']:
@@ -239,13 +228,128 @@ class RentalOrderViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         order.status = 'cancelled'
-        # Logika untuk mengembalikan ketersediaan produk
         for item in order.items.all():
              product = item.product
-             # Di sini Anda mungkin perlu logika lebih kompleks jika ada manajemen stok quantity
-             # Untuk saat ini, kita asumsikan 'available' adalah boolean sederhana per produk
-             if not product.available: # Hanya set available jika sebelumnya tidak available karena order ini
-                 product.available = True # atau logika penambahan stok
+             if not product.available:
+                 product.available = True
                  product.save()
         order.save()
         return Response(RentalOrderSerializer(order, context={'request': request}).data)
+
+# ----------------------------------------------------
+# VIEWS BARU UNTUK KERANJANG (CART)
+# ----------------------------------------------------
+
+class UserCartDetailView(APIView):
+    """
+    View untuk mengambil detail keranjang belanja milik pengguna yang sedang login.
+    Akan merespons GET request ke /api/v1/cart/ (misalnya).
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = CartSerializer # Untuk dokumentasi API otomatis
+
+    def get(self, request, *args, **kwargs):
+        """
+        Mengembalikan detail keranjang belanja pengguna saat ini.
+        Jika keranjang belum ada, keranjang baru akan dibuat.
+        """
+        cart, created = Cart.objects.get_or_create(user=request.user)
+        if created:
+            print(f"[UserCartDetailView DEBUG] Cart created for user: {request.user.username}")
+        else:
+            print(f"[UserCartDetailView DEBUG] Cart retrieved for user: {request.user.username}")
+        serializer = CartSerializer(cart, context={'request': request})
+        return Response(serializer.data)
+
+class CartItemViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet untuk mengelola item-item dalam keranjang belanja (CartItem).
+    Pengguna hanya bisa mengakses item dalam keranjangnya sendiri.
+    """
+    serializer_class = CartItemSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        """
+        Memastikan user hanya bisa melihat/mengelola item di keranjangnya sendiri.
+        """
+        user_cart, _ = Cart.objects.get_or_create(user=self.request.user)
+        return CartItem.objects.filter(cart=user_cart).select_related('product', 'product__shop')
+
+    def create(self, request, *args, **kwargs):
+        """
+        Menambahkan item ke keranjang. Jika item dengan produk dan periode sewa yang sama
+        sudah ada, maka kuantitasnya akan ditambahkan.
+        """
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        user_cart, _ = Cart.objects.get_or_create(user=request.user)
+        product = serializer.validated_data.get('product')
+        start_date = serializer.validated_data.get('start_date')
+        end_date = serializer.validated_data.get('end_date')
+        quantity_to_add = serializer.validated_data.get('quantity', 1)
+
+        if not product.available:
+            raise ValidationError({"product": f"Product '{product.name}' is not available for rent."})
+
+        # Coba cari item yang sama (produk dan periode sewa)
+        cart_item, created = CartItem.objects.get_or_create(
+            cart=user_cart,
+            product=product,
+            start_date=start_date,
+            end_date=end_date,
+            defaults={'quantity': quantity_to_add}
+        )
+
+        if not created:
+            # Jika item sudah ada, tambahkan kuantitasnya
+            cart_item.quantity += quantity_to_add
+            cart_item.save()
+            print(f"[CartItemViewSet DEBUG] Updated quantity for existing CartItem {cart_item.id} to {cart_item.quantity}")
+        else:
+            # Jika item baru dibuat oleh get_or_create, tidak perlu save lagi karena defaults sudah diterapkan
+            print(f"[CartItemViewSet DEBUG] Created new CartItem {cart_item.id} with quantity {cart_item.quantity}")
+        
+        # Serialisasi item yang (mungkin baru diupdate atau baru dibuat) untuk respons
+        response_serializer = self.get_serializer(cart_item)
+        headers = self.get_success_headers(response_serializer.data)
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK, headers=headers)
+
+    def perform_update(self, serializer):
+        """
+        Saat mengupdate item (misalnya PATCH untuk kuantitas), simpan perubahan.
+        Validasi dasar (seperti end_date > start_date) ada di serializer.
+        """
+        # Pastikan item yang diupdate adalah milik cart user (sudah ditangani get_queryset untuk retrieve)
+        print(f"[CartItemViewSet DEBUG] Updating CartItem {serializer.instance.id} with data: {serializer.validated_data}")
+        serializer.save()
+        print(f"[CartItemViewSet DEBUG] CartItem {serializer.instance.id} updated. New quantity: {serializer.instance.quantity}")
+
+
+    def perform_destroy(self, instance):
+        """
+        Saat menghapus item dari keranjang.
+        """
+        print(f"[CartItemViewSet DEBUG] Deleting CartItem {instance.id} for user {self.request.user.username}")
+        instance.delete()
+        print(f"[CartItemViewSet DEBUG] CartItem {instance.id} deleted.")
+
+
+    @action(detail=False, methods=['post'], url_path='clear-cart')
+    def clear_cart(self, request):
+        """
+        Menghapus semua item dari keranjang pengguna saat ini.
+        """
+        user_cart, created = Cart.objects.get_or_create(user=request.user)
+        if not created and user_cart.items.exists(): # Hanya hapus jika cart ada dan punya item
+            print(f"[CartItemViewSet DEBUG] Clearing all items from cart {user_cart.id} for user {request.user.username}")
+            user_cart.items.all().delete()
+            print(f"[CartItemViewSet DEBUG] Cart {user_cart.id} cleared.")
+            return Response({"detail": "Cart cleared successfully."}, status=status.HTTP_204_NO_CONTENT)
+        elif created:
+            print(f"[CartItemViewSet DEBUG] Cart was just created for user {request.user.username}, nothing to clear.")
+            return Response({"detail": "Cart is already empty (was just created)."}, status=status.HTTP_200_OK)
+        else: # Cart ada tapi sudah kosong
+            print(f"[CartItemViewSet DEBUG] Cart {user_cart.id} for user {request.user.username} is already empty.")
+            return Response({"detail": "Cart is already empty."}, status=status.HTTP_200_OK)

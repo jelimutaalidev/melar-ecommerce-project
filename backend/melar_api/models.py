@@ -166,3 +166,60 @@ class OrderItem(models.Model):
     @property
     def item_total(self):
         return self.price_per_day_at_rental * self.rental_duration_days * self.quantity
+
+# ---------------------------------------------
+# MODEL BARU UNTUK KERANJANG (CART)
+# ---------------------------------------------
+
+class Cart(models.Model):
+    """
+    Model untuk menyimpan keranjang belanja pengguna.
+    Satu pengguna memiliki satu keranjang.
+    """
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='cart')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Cart for {self.user.username}"
+
+    # Anda bisa menambahkan property untuk total harga keranjang di sini jika diinginkan,
+    # namun seringkali ini dihitung di serializer atau view.
+    # @property
+    # def total_cart_price(self):
+    #     return sum(item.subtotal for item in self.items.all())
+
+class CartItem(models.Model):
+    """
+    Model untuk menyimpan item-item yang ada di dalam keranjang belanja.
+    """
+    cart = models.ForeignKey(Cart, related_name='items', on_delete=models.CASCADE)
+    product = models.ForeignKey(AppProduct, on_delete=models.CASCADE)
+    quantity = models.PositiveIntegerField(default=1)
+    start_date = models.DateField()
+    end_date = models.DateField()
+    added_at = models.DateTimeField(auto_now_add=True) # Waktu item ditambahkan/diupdate
+
+    class Meta:
+        # Mencegah duplikasi item yang sama dengan periode sewa yang sama dalam satu keranjang
+        # Anda bisa menyesuaikan ini jika ingin item yang sama dengan periode sewa sama digabung kuantitasnya
+        unique_together = ('cart', 'product', 'start_date', 'end_date')
+        ordering = ['-added_at']
+
+    def __str__(self):
+        return f"{self.quantity} x {self.product.name} (for {self.cart.user.username})"
+
+    @property
+    def rental_duration_days_cart(self): # Memberi nama berbeda agar tidak konflik jika ada property serupa
+        if self.start_date and self.end_date:
+            duration = (self.end_date - self.start_date).days + 1
+            return max(1, duration) # Minimal 1 hari
+        return 0
+
+    @property
+    def subtotal(self):
+        """
+        Menghitung subtotal untuk item keranjang ini berdasarkan harga produk saat ini.
+        Harga bisa dikunci saat checkout menjadi 'price_per_day_at_rental' di OrderItem.
+        """
+        return self.product.price * self.rental_duration_days_cart * self.quantity

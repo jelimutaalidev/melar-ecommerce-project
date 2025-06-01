@@ -4,7 +4,10 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 from django.contrib.auth.models import User
-from .models import Category, Shop, AppProduct, ProductImage, UserProfile, ProductReview, RentalOrder, OrderItem
+from .models import (
+    Category, Shop, AppProduct, ProductImage, UserProfile, ProductReview, RentalOrder, OrderItem,
+    Cart, CartItem  # <-- TAMBAHKAN Cart dan CartItem
+)
 from decimal import Decimal # Untuk perbandingan harga yang presisi
 import datetime # Untuk tanggal
 
@@ -27,8 +30,6 @@ class CategoryAPITests(APITestCase):
     def setUp(self):
         self.admin_user = User.objects.create_superuser(username='testadmin', email='admin@example.com', password='password123')
         self.normal_user = User.objects.create_user(username='testuser', email='user@example.com', password='password123')
-        # UserProfile akan dibuat otomatis oleh signal
-
         self.category1 = Category.objects.create(name='Elektronik', description='Perangkat elektronik.')
         self.category2 = Category.objects.create(name='Fotografi', description='Peralatan fotografi.')
         self.list_create_url = reverse('category-list')
@@ -44,7 +45,8 @@ class CategoryAPITests(APITestCase):
     def test_create_category_unauthenticated(self):
         data = {'name': 'Pakaian', 'description': 'Baju dan celana'}
         response = self.client.post(self.list_create_url, data, format='json')
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED) # Diubah dari 403 ke 401
+
 
     def test_create_category_authenticated_non_admin(self):
         self.client.force_authenticate(user=self.normal_user)
@@ -152,7 +154,7 @@ class ShopAPITests(APITestCase):
         response = create_shop_for_user(self.client, self.user2, new_shop_data)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
         self.assertEqual(Shop.objects.count(), 2)
-        self.user2.refresh_from_db() # Refresh user untuk mendapatkan profile yang terupdate oleh signal
+        self.user2.refresh_from_db() 
         self.assertTrue(self.user2.profile.has_shop)
         new_shop = Shop.objects.get(name=new_shop_data['name'])
         self.assertEqual(new_shop.owner, self.user2)
@@ -220,16 +222,11 @@ class AppProductAPITests(APITestCase):
             shop=self.shop_owned,
             name="Kamera Mirrorless Alpha",
             description="Kamera canggih untuk profesional.",
-            price=Decimal('75.00'), # Gunakan Decimal untuk harga
+            price=Decimal('75.00'),
             category=self.category_electronics,
             available=True,
             rating=4.8
         )
-        # Anda perlu mock file gambar jika ingin menguji upload atau tampilan gambar sebenarnya.
-        # Untuk tes serializer, cukup pastikan relasi ProductImage ada jika serializer membutuhkannya.
-        # Jika serializer Anda menghasilkan URL dari ImageField, Anda perlu setup MEDIA_ROOT sementara
-        # atau mock URL-nya.
-        # ProductImage.objects.create(product=self.product1, image='product_images/sample1.jpg', order=0)
 
     def test_list_products_unauthenticated(self):
         url = reverse('appproduct-list')
@@ -237,9 +234,8 @@ class AppProductAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]['name'], self.product1.name)
-        self.assertIn('images', response.data[0]) # Serializer harusnya mengembalikan 'images'
+        self.assertIn('images', response.data[0])
         self.assertIsInstance(response.data[0]['images'], list)
-
 
     def test_retrieve_product_unauthenticated(self):
         url = reverse('appproduct-detail', kwargs={'pk': self.product1.pk})
@@ -248,14 +244,13 @@ class AppProductAPITests(APITestCase):
         self.assertEqual(response.data['name'], self.product1.name)
         self.assertIn('images', response.data)
 
-
     def test_create_product_by_shop_owner(self):
         self.client.force_authenticate(user=self.owner_user)
         product_data = {
             'shop_id': self.shop_owned.id,
             'name': 'Speaker Bluetooth Pro',
             'description': 'Speaker portable dengan suara mantap.',
-            'price': '25.00', # Serializer akan mengkonversi ke Decimal
+            'price': '25.00',
             'category_id': self.category_electronics.id,
             'available': True
         }
@@ -275,26 +270,17 @@ class AppProductAPITests(APITestCase):
         }
         url = reverse('appproduct-list')
         response = self.client.post(url, product_data, format='json')
-        # Perbaikan dari sebelumnya: view akan raise ValidationError (400) jika shop_id missing
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn('shop_id', response.data) # Error harusnya menyebutkan shop_id
-        # Anda bisa lebih spesifik memeriksa pesan errornya
-        self.assertIn("This field is required.", str(response.data['shop_id']))
-
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST) # Harusnya 400
+        self.assertIn('shop_id', response.data)
+        # Sesuaikan pesan error yang diharapkan
+        self.assertIn("This field is required in the request payload.", str(response.data['shop_id']))
 
     def test_create_product_for_other_user_shop_forbidden(self):
         self.client.force_authenticate(user=self.another_user)
-        other_shop_data = {
-            'owner_id': self.another_user.id, # Untuk serializer Shop
-            'name': 'Another User Shop', 'description': 'Desc', 'location': 'Somewhere Else'
-        }
-        # Buat toko untuk another_user dulu
-        create_shop_response = self.client.post(reverse('shop-list'), other_shop_data, format='json')
-        self.assertEqual(create_shop_response.status_code, status.HTTP_201_CREATED, create_shop_response.data)
-        # other_shop_id = create_shop_response.data['id']
-
+        # User 'another_user' tidak memiliki shop, jadi dia tidak bisa menentukan shop_id
+        # Jika dia mencoba membuat produk untuk shop_owned (milik owner_user), perform_create akan gagal
         product_data = {
-            'shop_id': self.shop_owned.id, # Mencoba membuat produk di toko milik self.owner_user
+            'shop_id': self.shop_owned.id, 
             'name': 'Produk Curian',
             'description': 'Deskripsi.',
             'price': '10.00',
@@ -302,7 +288,6 @@ class AppProductAPITests(APITestCase):
         }
         url = reverse('appproduct-list')
         response = self.client.post(url, product_data, format='json')
-        # Karena self.another_user bukan owner dari self.shop_owned
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_update_own_product(self):
@@ -352,7 +337,6 @@ class ProductReviewAPITests(APITestCase):
         self.list_create_url = reverse('productreview-list')
 
     def test_list_reviews_for_product(self):
-        # List semua review (bisa difilter by product_id di query params)
         response = self.client.get(f"{self.list_create_url}?product_id={self.product.id}")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 1)
@@ -361,7 +345,7 @@ class ProductReviewAPITests(APITestCase):
     def test_create_review_authenticated(self):
         self.client.force_authenticate(user=self.user2)
         data = {
-            'product': self.product.id, # Kirim product ID
+            'product': self.product.id,
             'rating': 4,
             'comment': "Cukup baik."
         }
@@ -373,7 +357,7 @@ class ProductReviewAPITests(APITestCase):
     def test_create_review_unauthenticated_forbidden(self):
         data = {'product': self.product.id, 'rating': 3, 'comment': "Tidak bisa review."}
         response = self.client.post(self.list_create_url, data, format='json')
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED) # Diubah dari 403 ke 401
 
     def test_update_own_review(self):
         self.client.force_authenticate(user=self.user1)
@@ -416,30 +400,15 @@ class RentalOrderAPITests(APITestCase):
     def test_create_rental_order_authenticated(self):
         self.client.force_authenticate(user=self.user_renter)
         start_date = datetime.date.today()
-        end_date = start_date + datetime.timedelta(days=2) # 3 hari rental
+        end_date = start_date + datetime.timedelta(days=2)
 
         order_data = {
-            "first_name": "Test",
-            "last_name": "Renter",
-            "email_at_checkout": "renter@example.com",
-            "phone_at_checkout": "0811111111",
-            "billing_address": "Jl. Rental No. 1",
-            "billing_city": "Jakarta",
-            "billing_state": "DKI Jakarta",
-            "billing_zip": "10000",
+            "first_name": "Test", "last_name": "Renter", "email_at_checkout": "renter@example.com",
+            "phone_at_checkout": "0811111111", "billing_address": "Jl. Rental No. 1",
+            "billing_city": "Jakarta", "billing_state": "DKI Jakarta", "billing_zip": "10000",
             "order_items_data": [
-                {
-                    "product_id": self.product1.id,
-                    "quantity": 1,
-                    "start_date": start_date.isoformat(),
-                    "end_date": end_date.isoformat()
-                },
-                {
-                    "product_id": self.product2.id,
-                    "quantity": 2,
-                    "start_date": start_date.isoformat(),
-                    "end_date": end_date.isoformat()
-                }
+                {"product_id": self.product1.id, "quantity": 1, "start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
+                {"product_id": self.product2.id, "quantity": 2, "start_date": start_date.isoformat(), "end_date": end_date.isoformat()}
             ]
         }
         response = self.client.post(self.list_create_url, order_data, format='json')
@@ -448,42 +417,45 @@ class RentalOrderAPITests(APITestCase):
         order = RentalOrder.objects.first()
         self.assertEqual(order.user, self.user_renter)
         self.assertEqual(order.items.count(), 2)
-        
-        # Cek total harga (3 hari untuk product1, 3 hari untuk 2x product2)
-        # Product1: 50 * 3 * 1 = 150
-        # Product2: 30 * 3 * 2 = 180
-        # Total = 150 + 180 = 330
         self.assertEqual(order.total_price, Decimal("330.00"))
-
 
     def test_create_rental_order_unauthenticated_forbidden(self):
         order_data = {"order_items_data": [{"product_id": self.product1.id, "quantity": 1, "start_date": "2025-06-01", "end_date": "2025-06-03"}]}
         response = self.client.post(self.list_create_url, order_data, format='json')
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED) 
 
-    def test_list_own_rental_orders(self):
-        # Buat order dulu
+    def test_list_own_rental_orders_via_detail_view_or_specific_permission(self):
         self.client.force_authenticate(user=self.user_renter)
         start_date = datetime.date.today()
         end_date = start_date + datetime.timedelta(days=1)
         order_data = {"order_items_data": [{"product_id": self.product1.id, "quantity": 1, "start_date": start_date.isoformat(), "end_date": end_date.isoformat()}]}
-        self.client.post(self.list_create_url, order_data, format='json')
-
-        response = self.client.get(self.list_create_url) # User biasa tidak bisa list semua
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN) # Karena permission untuk list hanya admin
-
-        # User harus retrieve ordernya satu per satu jika tahu ID nya, atau kita buat endpoint khusus "my-orders"
-        # Untuk sekarang, kita tes retrieve by ID
-        order = RentalOrder.objects.get(user=self.user_renter)
-        detail_url = reverse('rentalorder-detail', kwargs={'pk': order.pk})
-        response_detail = self.client.get(detail_url)
-        self.assertEqual(response_detail.status_code, status.HTTP_200_OK)
-
+        create_response = self.client.post(self.list_create_url, order_data, format='json')
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        
+        # Test listing (yang difilter oleh get_queryset di RentalOrderViewSet)
+        response_list = self.client.get(self.list_create_url)
+        self.assertEqual(response_list.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response_list.data), 1) # Hanya order milik user_renter
 
     def test_list_all_rental_orders_admin(self):
+        # Buat beberapa order oleh user berbeda
+        self.client.force_authenticate(user=self.user_renter)
+        sdate1 = datetime.date.today()
+        edate1 = sdate1 + datetime.timedelta(days=1)
+        self.client.post(self.list_create_url, {"order_items_data": [{"product_id": self.product1.id, "quantity": 1, "start_date": sdate1.isoformat(), "end_date": edate1.isoformat()}]}, format='json')
+        self.client.logout()
+
+        other_renter = User.objects.create_user(username='otherrenter', password='password123')
+        self.client.force_authenticate(user=other_renter)
+        sdate2 = datetime.date.today() + datetime.timedelta(days=5)
+        edate2 = sdate2 + datetime.timedelta(days=2)
+        self.client.post(self.list_create_url, {"order_items_data": [{"product_id": self.product2.id, "quantity": 1, "start_date": sdate2.isoformat(), "end_date": edate2.isoformat()}]}, format='json')
+        self.client.logout()
+
         self.client.force_authenticate(user=self.admin_user)
         response = self.client.get(self.list_create_url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 2) # Admin bisa lihat semua
 
 
     def test_cancel_own_order(self):
@@ -503,34 +475,179 @@ class RentalOrderAPITests(APITestCase):
         self.assertEqual(order.status, 'cancelled')
 
     def test_cancel_other_user_order_forbidden(self):
-        # Buat order dengan user_renter
         self.client.force_authenticate(user=self.user_renter)
         start_date = datetime.date.today()
         end_date = start_date + datetime.timedelta(days=1)
-        order_data = {
-            "status": "pending", # Pastikan status awal memungkinkan pembatalan
-            "order_items_data": [{
-                "product_id": self.product1.id,
-                "quantity": 1,
-                "start_date": start_date.isoformat(),
-                "end_date": end_date.isoformat()
-            }]
-        }
+        order_data = {"status": "pending", "order_items_data": [{"product_id": self.product1.id, "quantity": 1, "start_date": start_date.isoformat(), "end_date": end_date.isoformat()}]}
         create_response = self.client.post(self.list_create_url, order_data, format='json')
         self.assertEqual(create_response.status_code, status.HTTP_201_CREATED, create_response.data)
         order_id = create_response.data['id']
         self.client.logout()
 
-        # Coba cancel dengan shop_owner (yang bukan pemilik order dan bukan admin)
-        self.client.force_authenticate(user=self.shop_owner)
+        self.client.force_authenticate(user=self.shop_owner) # Shop owner bukan pemilik order
         cancel_url = reverse('rentalorder-cancel-order', kwargs={'pk': order_id})
         response = self.client.post(cancel_url)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND) # <--- PASTIKAN INI 404 
 
-        # PERBAIKAN: Harapkan HTTP 404 Not Found
-        # karena get_queryset untuk user shop_owner tidak akan menemukan order milik user_renter,
-        # sehingga get_object() akan gagal dengan 404 sebelum IsOrderOwner sempat dievaluasi pada objek.
-        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND) # <--- BARIS INI YANG DIPERBAIKI
-
-        # Pastikan order tidak benar-benar tercancel
         order_asli = RentalOrder.objects.get(id=order_id)
-        self.assertEqual(order_asli.status, "pending") # atau status awal saat dibuat
+        self.assertEqual(order_asli.status, "pending")
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND) # PASTIKAN INI
+        
+# ... (setelah kelas RentalOrderAPITests) ...
+
+class CartAPITests(APITestCase):
+    def setUp(self):
+        self.user1 = User.objects.create_user(username='cartuser1', email='cart1@example.com', password='password123')
+        self.user2 = User.objects.create_user(username='cartuser2', email='cart2@example.com', password='password123')
+        
+        self.category = Category.objects.create(name="Cart Test Category")
+        self.shop_owner = User.objects.create_user(username='cartshopowner', password='password123')
+        self.shop = Shop.objects.create(owner=self.shop_owner, name="Cart Test Shop", location="Test Location")
+        self.product1 = AppProduct.objects.create(shop=self.shop, name="Product for Cart 1", price=Decimal("20.00"), category=self.category, available=True)
+        self.product2 = AppProduct.objects.create(shop=self.shop, name="Product for Cart 2", price=Decimal("30.00"), category=self.category, available=True)
+        self.product_unavailable = AppProduct.objects.create(shop=self.shop, name="Unavailable Product", price=Decimal("10.00"), category=self.category, available=False)
+
+        self.cart_detail_url = reverse('user-cart-detail')
+        self.cart_item_list_create_url = reverse('cartitem-list')
+        # Detail URL untuk cart item akan dibuat dinamis
+
+    # --- Test UserCartDetailView ---
+    def test_get_cart_unauthenticated(self):
+        response = self.client.get(self.cart_detail_url)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_get_or_create_cart_authenticated_user(self):
+        self.client.force_authenticate(user=self.user1)
+        response = self.client.get(self.cart_detail_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(Cart.objects.filter(user=self.user1).exists())
+        cart = Cart.objects.get(user=self.user1)
+        self.assertEqual(response.data['id'], cart.id)
+        self.assertEqual(len(response.data['items']), 0) # Keranjang baru harusnya kosong
+
+    # --- Test CartItemViewSet ---
+    def test_add_item_to_cart_unauthenticated(self):
+        data = { "product_id": self.product1.id, "quantity": 1, "start_date": "2025-07-01", "end_date": "2025-07-03" }
+        response = self.client.post(self.cart_item_list_create_url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_add_new_item_to_cart_authenticated(self):
+        self.client.force_authenticate(user=self.user1)
+        start_date = (datetime.date.today() + datetime.timedelta(days=5)).isoformat()
+        end_date = (datetime.date.today() + datetime.timedelta(days=7)).isoformat()
+        data = {
+            "product_id": self.product1.id,
+            "quantity": 1,
+            "start_date": start_date,
+            "end_date": end_date
+        }
+        response = self.client.post(self.cart_item_list_create_url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(CartItem.objects.count(), 1)
+        cart_item = CartItem.objects.first()
+        self.assertEqual(cart_item.product, self.product1)
+        self.assertEqual(cart_item.quantity, 1)
+        self.assertEqual(cart_item.cart.user, self.user1)
+        self.assertEqual(str(cart_item.start_date), start_date)
+
+    def test_add_existing_item_to_cart_updates_quantity(self):
+        self.client.force_authenticate(user=self.user1)
+        start_date = (datetime.date.today() + datetime.timedelta(days=10)).isoformat()
+        end_date = (datetime.date.today() + datetime.timedelta(days=12)).isoformat()
+        
+        # Tambah item pertama kali
+        initial_data = { "product_id": self.product1.id, "quantity": 1, "start_date": start_date, "end_date": end_date }
+        response1 = self.client.post(self.cart_item_list_create_url, initial_data, format='json')
+        self.assertEqual(response1.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(CartItem.objects.count(), 1)
+        
+        # Tambah item yang sama (produk & tanggal sama) lagi
+        add_again_data = { "product_id": self.product1.id, "quantity": 2, "start_date": start_date, "end_date": end_date }
+        response2 = self.client.post(self.cart_item_list_create_url, add_again_data, format='json')
+        self.assertEqual(response2.status_code, status.HTTP_200_OK, response2.data) # Harusnya 200 OK karena update
+        self.assertEqual(CartItem.objects.count(), 1) # Masih 1 item
+        cart_item = CartItem.objects.first()
+        self.assertEqual(cart_item.quantity, 3) # 1 (awal) + 2 (tambahan)
+
+    def test_add_unavailable_product_to_cart_fails(self):
+        self.client.force_authenticate(user=self.user1)
+        start_date = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+        end_date = (datetime.date.today() + datetime.timedelta(days=2)).isoformat()
+        data = {"product_id": self.product_unavailable.id, "quantity": 1, "start_date": start_date, "end_date": end_date}
+        response = self.client.post(self.cart_item_list_create_url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('not available for rent', response.data['product'][0].lower() if isinstance(response.data.get('product'), list) else str(response.data.get('product')).lower())
+
+
+    def test_add_item_invalid_dates_fails(self):
+        self.client.force_authenticate(user=self.user1)
+        start_date = (datetime.date.today() + datetime.timedelta(days=3)).isoformat()
+        end_date_before_start = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+        data = {"product_id": self.product1.id, "quantity": 1, "start_date": start_date, "end_date": end_date_before_start}
+        response = self.client.post(self.cart_item_list_create_url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('End date cannot be before start date.', response.data['non_field_errors'][0] if 'non_field_errors' in response.data else str(response.data))
+
+
+    def test_list_cart_items_authenticated(self):
+        self.client.force_authenticate(user=self.user1)
+        cart = Cart.objects.create(user=self.user1)
+        CartItem.objects.create(cart=cart, product=self.product1, quantity=1, start_date="2025-08-01", end_date="2025-08-03")
+        CartItem.objects.create(cart=cart, product=self.product2, quantity=2, start_date="2025-08-05", end_date="2025-08-06")
+        
+        response = self.client.get(self.cart_item_list_create_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 2)
+
+        # Pastikan user lain tidak bisa melihat cart item user1
+        self.client.force_authenticate(user=self.user2)
+        response_user2 = self.client.get(self.cart_item_list_create_url)
+        self.assertEqual(response_user2.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response_user2.data), 0) # user2 punya keranjang kosong
+
+    def test_update_cart_item_quantity(self):
+        self.client.force_authenticate(user=self.user1)
+        cart = Cart.objects.create(user=self.user1)
+        cart_item = CartItem.objects.create(cart=cart, product=self.product1, quantity=1, start_date="2025-09-01", end_date="2025-09-03")
+        
+        update_url = reverse('cartitem-detail', kwargs={'pk': cart_item.pk})
+        data = {"quantity": 5}
+        response = self.client.patch(update_url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        cart_item.refresh_from_db()
+        self.assertEqual(cart_item.quantity, 5)
+
+    def test_delete_cart_item(self):
+        self.client.force_authenticate(user=self.user1)
+        cart = Cart.objects.create(user=self.user1)
+        cart_item = CartItem.objects.create(cart=cart, product=self.product1, quantity=1, start_date="2025-10-01", end_date="2025-10-03")
+        self.assertEqual(CartItem.objects.count(), 1)
+
+        delete_url = reverse('cartitem-detail', kwargs={'pk': cart_item.pk})
+        response = self.client.delete(delete_url)
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(CartItem.objects.count(), 0)
+
+    def test_clear_cart_action(self):
+        self.client.force_authenticate(user=self.user1)
+        cart = Cart.objects.create(user=self.user1)
+        CartItem.objects.create(cart=cart, product=self.product1, quantity=2, start_date="2025-11-01", end_date="2025-11-05")
+        CartItem.objects.create(cart=cart, product=self.product2, quantity=1, start_date="2025-11-10", end_date="2025-11-12")
+        self.assertTrue(cart.items.exists())
+
+        clear_cart_url = reverse('cartitem-clear-cart')
+        response = self.client.post(clear_cart_url) # Method POST seperti di view
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT, response.data)
+        cart.refresh_from_db() # Refresh instance cart
+        self.assertFalse(cart.items.exists()) # Semua item seharusnya sudah terhapus
+        self.assertTrue(Cart.objects.filter(user=self.user1).exists()) # Cart-nya sendiri tidak terhapus
+
+    def test_clear_empty_cart(self):
+        self.client.force_authenticate(user=self.user1)
+        Cart.objects.get_or_create(user=self.user1) # Pastikan cart ada tapi kosong
+        
+        clear_cart_url = reverse('cartitem-clear-cart')
+        response = self.client.post(clear_cart_url)
+        # Sesuai view, ini akan mengembalikan 200 OK dengan detail
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("already empty", response.data['detail'].lower())

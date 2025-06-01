@@ -14,24 +14,24 @@ import {
   ChevronRight,
   Package,
   Store,
-  Loader2 // Ditambahkan untuk ikon loading
+  Loader2 // Pastikan Loader2 diimpor jika Anda menambahkannya untuk state loading
 } from 'lucide-react';
-import { useCart } from '../context/CartContext';
+import { useCart } from '../context/CartContext'; // Pastikan path ini benar
 import { format } from 'date-fns';
-import type { AppProduct } from '../types';
-// import { LOCAL_STORAGE_KEYS } from '../data/dummyDataInitializer'; // Tidak digunakan lagi untuk data produk utama
+import type { AppProduct } from '../types'; // Pastikan path ini benar
 import { apiClient } from '../utils/apiClient'; // IMPORT apiClient
-import ProductCard from '../components/products/ProductCard';
+import ProductCard from '../components/products/ProductCard'; // Pastikan path ini benar
 
 const ProductDetailPage: React.FC = () => {
   const { id: productIdFromUrl } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { addItem } = useCart();
+  // Ambil addItem dan state lain yang mungkin relevan dari CartContext
+  const { addItem, isLoading: isCartLoading, error: cartErrorText } = useCart(); // isLoading dan error dari CartContext
 
   const [product, setProduct] = useState<AppProduct | null | undefined>(undefined);
   const [relatedProducts, setRelatedProducts] = useState<AppProduct[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true); // State loading untuk fetch detail produk
+  const [error, setError] = useState<string | null>(null); // State error untuk fetch detail produk
 
   const [activeImage, setActiveImage] = useState(0);
   const [selectedStartDate, setSelectedStartDate] = useState<string>('');
@@ -41,13 +41,11 @@ const ProductDetailPage: React.FC = () => {
     const fetchProductDetails = async () => {
       if (productIdFromUrl) {
         console.log(`[ProductDetailPage DEBUG] Attempting to fetch product ID: ${productIdFromUrl} from API...`);
-        setProduct(undefined); // Reset state produk untuk menunjukkan loading
+        setProduct(undefined);
         setIsLoading(true);
         setError(null);
 
         try {
-          // Ambil data produk spesifik dari API
-          // Tipe data dari apiClient.get mungkin any, jadi kita perlu cast atau proses
           const apiProductData: any = await apiClient.get(`/products/${productIdFromUrl}/`);
           console.log("[ProductDetailPage DEBUG] Raw product data fetched successfully from API:", apiProductData);
 
@@ -56,37 +54,36 @@ const ProductDetailPage: React.FC = () => {
             throw new Error(`Product with ID ${productIdFromUrl} not found or API returned invalid data.`);
           }
           
-          // Proses dan konversi data sebelum disimpan ke state
           const processedProduct: AppProduct = {
             ...apiProductData,
-            id: String(apiProductData.id), // Pastikan ID adalah string
+            id: String(apiProductData.id),
             price: parseFloat(apiProductData.price as any),
             rating: parseFloat(apiProductData.rating as any) || 0,
             total_individual_rentals: parseInt(apiProductData.total_individual_rentals as any, 10) || 0,
             available: apiProductData.available !== undefined ? apiProductData.available : true,
-            // Mapping dari owner_info (dari API) ke owner (sesuai tipe AppProduct di frontend)
-            owner: apiProductData.owner_info ? {
+            owner: apiProductData.owner_info ? { // Perhatikan mapping owner_info ke owner
               id: String(apiProductData.owner_info.id),
               name: apiProductData.owner_info.name
-            } : { id: '', name: 'Unknown Shop' }, // Fallback jika owner_info tidak ada
-            images: Array.isArray(apiProductData.images) ? apiProductData.images : [], // Pastikan images adalah array
-            // category sudah string dari serializer
+            } : { id: '', name: 'Unknown Shop' },
+            images: Array.isArray(apiProductData.images) ? apiProductData.images : [],
+            shopId: String(apiProductData.shop_id || (apiProductData.owner_info ? apiProductData.owner_info.id : '')), // Ambil shopId jika ada
+            // category sudah string dari serializer, tidak perlu parsing khusus di sini jika backend sudah benar
+            category: apiProductData.category_name || apiProductData.category || 'Uncategorized',
+            reviews: Array.isArray(apiProductData.reviews) ? apiProductData.reviews : [], // Pastikan reviews juga array
           };
           setProduct(processedProduct);
           console.log("[ProductDetailPage DEBUG] Processed product set to state:", processedProduct);
 
-
-          // Logika untuk mengambil "Related Products"
           if (processedProduct && processedProduct.category) {
             console.log(`[ProductDetailPage DEBUG] Fetching related products for category: ${processedProduct.category}`);
-            const allProductsApi: any[] = await apiClient.get('/products/'); // Fetch semua produk lagi
+            const allProductsApi: any[] = await apiClient.get('/products/');
             const related = allProductsApi
               .filter(p =>
-                p.category === processedProduct.category &&
+                p.category === processedProduct.category && // atau p.category_name jika itu yang dikirim API
                 String(p.id) !== String(processedProduct.id) &&
                 p.available
               )
-              .map((p): AppProduct => ({ // Konversi tipe juga untuk related products
+              .map((p): AppProduct => ({
                 ...p,
                 id: String(p.id),
                 price: parseFloat(p.price as any),
@@ -95,6 +92,9 @@ const ProductDetailPage: React.FC = () => {
                 available: p.available !== undefined ? p.available : true,
                 owner: p.owner_info ? { id: String(p.owner_info.id), name: p.owner_info.name } : { id: '', name: 'Unknown Shop'},
                 images: Array.isArray(p.images) ? p.images : [],
+                shopId: String(p.shop_id || (p.owner_info ? p.owner_info.id : '')),
+                category: p.category_name || p.category || 'Uncategorized',
+                reviews: Array.isArray(p.reviews) ? p.reviews : [],
               }))
               .slice(0, 4);
             setRelatedProducts(related);
@@ -148,7 +148,12 @@ const ProductDetailPage: React.FC = () => {
                 <button onClick={() => navigate('/products')} className="btn-primary">
                 Browse Products
                 </button>
-                <button onClick={() => { setIsLoading(true); setError(null); /* Re-call fetchProductDetails atau trigger useEffect */ const event = new PopStateEvent('popstate'); window.dispatchEvent(event); navigate(0); }} className="btn-secondary">
+                <button onClick={() => { 
+                    // Cara trigger useEffect lagi dengan dependensi yang sama adalah mengubah dependensinya sedikit
+                    // atau cara lebih mudah, panggil fungsinya lagi
+                    // Namun untuk kasus ini, reload halaman mungkin yang paling simpel
+                     window.location.reload();
+                }} className="btn-secondary">
                 Try Again
                 </button>
             </div>
@@ -179,8 +184,12 @@ const ProductDetailPage: React.FC = () => {
     );
   }
 
-  const handleAddToCart = () => {
-    if (!product) return; // Guard clause
+  const handleAddToCart = async () => { // Fungsi dijadikan async
+    if (!product) {
+        console.error("[ProductDetailPage DEBUG] handleAddToCart: Product is null. Cannot add to cart.");
+        alert("Cannot add to cart. Product details are not available.");
+        return;
+    }
     if (!selectedStartDate || !selectedEndDate) {
       alert('Please select rental dates');
       return;
@@ -193,21 +202,25 @@ const ProductDetailPage: React.FC = () => {
         return;
     }
 
-    addItem({
-      id: product.id,
-      name: product.name,
-      images: product.images,
-      price: product.price, // Sudah number
-      rentalPeriod: {
-        startDate: selectedStartDate,
-        endDate: selectedEndDate
-      },
-      owner: product.owner, // Sekarang product.owner sudah sesuai dengan tipe CartItem
-      shopId: product.shopId,
-      category: product.category,
-    });
+    const rentalPeriodForCart = {
+      startDate: selectedStartDate,
+      endDate: selectedEndDate
+    };
 
-    navigate('/cart');
+    console.log("[ProductDetailPage DEBUG] handleAddToCart: Calling addItem with Product:", product, "and RentalPeriod:", rentalPeriodForCart);
+    try {
+      // **PERBAIKAN UTAMA DI SINI:**
+      // Memanggil addItem dengan dua argumen: objek produk dan objek rentalPeriod.
+      await addItem(product, rentalPeriodForCart); // Quantity akan default ke 1
+      
+      console.log("[ProductDetailPage DEBUG] handleAddToCart: addItem call succeeded. Navigating to cart.");
+      navigate('/cart');
+    } catch (err: any) {
+      console.error("[ProductDetailPage DEBUG] handleAddToCart: Error from CartContext addItem:", err);
+      // Menampilkan error yang mungkin di-throw oleh CartContext.addItem
+      // Jika CartContext.setError sudah menampilkan pesan global, ini mungkin tidak perlu.
+      alert(`Failed to add item to cart: ${err.message || 'Please try again.'}`);
+    }
   };
 
   const nextImage = () => {
@@ -222,7 +235,6 @@ const ProductDetailPage: React.FC = () => {
 
   const today = new Date().toISOString().split('T')[0];
 
-  // Sisa JSX untuk render halaman detail produk
   return (
     <div className="bg-gray-50 min-h-screen pb-16 fade-in">
       <div className="bg-white border-b">
@@ -293,8 +305,11 @@ const ProductDetailPage: React.FC = () => {
             <div className="flex flex-col">
               <div className="mb-auto">
                 <div className="flex items-center gap-2 text-sm text-gray-500 mb-2">
-                  <Link to={`/products?category=${encodeURIComponent(product.category)}`} className="bg-primary-100 text-primary-700 px-2 py-0.5 rounded hover:bg-primary-200 transition-colors">
-                    {product.category}
+                  <Link 
+                    to={`/products?category=${encodeURIComponent(product.category || 'Uncategorized')}`} 
+                    className="bg-primary-100 text-primary-700 px-2 py-0.5 rounded hover:bg-primary-200 transition-colors"
+                  >
+                    {product.category || 'Uncategorized'}
                   </Link>
                   <div className="flex items-center">
                     {[...Array(5)].map((_, i) => (
@@ -315,7 +330,7 @@ const ProductDetailPage: React.FC = () => {
                   <span className="text-3xl font-bold text-primary-600">${product.price.toFixed(2)}</span>
                   <span className="text-sm text-gray-500">per day</span>
                 </div>
-                {product.owner && ( // Menggunakan product.owner setelah mapping
+                {product.owner && (
                     <div className="flex items-center mb-4 text-sm">
                       <Store size={16} className="text-gray-500 mr-2" />
                       <span>
@@ -415,15 +430,20 @@ const ProductDetailPage: React.FC = () => {
                 <div className="flex gap-3">
                   <button
                     onClick={handleAddToCart}
-                    disabled={!product.available || !selectedStartDate || !selectedEndDate || new Date(selectedEndDate) < new Date(selectedStartDate)}
+                    disabled={
+                        !product.available || 
+                        !selectedStartDate || 
+                        !selectedEndDate || 
+                        (selectedStartDate && selectedEndDate && new Date(selectedEndDate) < new Date(selectedStartDate)) ||
+                        isCartLoading // Menggunakan isLoading dari CartContext
+                    }
                     className={`btn flex-1 text-base py-3 ${
-                      product.available && selectedStartDate && selectedEndDate && new Date(selectedEndDate) >= new Date(selectedStartDate)
+                      (product.available && selectedStartDate && selectedEndDate && new Date(selectedEndDate) >= new Date(selectedStartDate) && !isCartLoading)
                         ? 'btn-primary'
                         : 'bg-gray-300 text-gray-500 cursor-not-allowed'
                     }`}
                   >
-                    <ShoppingCart size={18} className="mr-2" />
-                    {product.available ? 'Add to Cart' : 'Unavailable'}
+                    {isCartLoading ? 'Adding...' : (product.available ? 'Add to Cart' : 'Unavailable')}
                   </button>
                   <button className="btn p-3 border border-gray-300 hover:bg-gray-100 transition-colors" aria-label="Add to wishlist">
                     <Heart size={20} className="text-gray-600" />
