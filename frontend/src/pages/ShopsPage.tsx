@@ -1,84 +1,121 @@
 // src/pages/ShopsPage.tsx
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Search, Store, MapPin, Star } from 'lucide-react';
-// Pastikan path ke types.ts dan dummyDataInitializer.ts sudah benar
-import type { Shop, AppProduct } from '../types'; 
-import { LOCAL_STORAGE_KEYS, dummyShops as initialDummyShopsArray } from '../data/dummyDataInitializer'; 
+import { Search, Store, MapPin, Star, Loader2 } from 'lucide-react'; // Loader2 ditambahkan
+import type { Shop } from '../types'; // AppProduct mungkin tidak lagi dibutuhkan langsung di sini
+import { apiClient } from '../utils/apiClient'; // IMPORT apiClient
+// Hapus: import { LOCAL_STORAGE_KEYS, dummyShops as initialDummyShopsArray } from '../data/dummyDataInitializer';
 
 const ShopsPage: React.FC = () => {
-  // State untuk menyimpan toko yang akan ditampilkan setelah dicek memiliki produk
-  const [relevantShops, setRelevantShops] = useState<Shop[]>([]);
+  const [allFetchedShops, setAllFetchedShops] = useState<Shop[]>([]); // Ganti nama state
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null); // State untuk error
 
-  // Fungsi untuk memuat, memfilter, dan mengatur toko
-  const loadAndSetDisplayShops = () => {
+  // Fungsi untuk memuat, memfilter, dan mengatur toko dari API
+  const fetchShopsFromAPI = async () => {
     setIsLoading(true);
-    
-    // 1. Ambil daftar semua toko yang ada di localStorage (yang seharusnya diisi oleh initializer)
-    const allPersistedShopsString = localStorage.getItem(LOCAL_STORAGE_KEYS.SHOPS);
-    const allPersistedShops: Shop[] = allPersistedShopsString ? JSON.parse(allPersistedShopsString) : [];
+    setError(null);
+    console.log("[ShopsPage DEBUG] Attempting to fetch shops from API...");
+    try {
+      // API call ke endpoint /shops/
+      const fetchedShopsFromApi: Shop[] = await apiClient.get('/shops/');
+      console.log("[ShopsPage DEBUG] Shops fetched successfully from API:", fetchedShopsFromApi);
 
-    // 2. Filter hanya untuk 5 toko dummy awal kita dan pastikan mereka ada di localStorage
-    //    DAN memiliki produk yang tersimpan.
-    const shopsToDisplay = initialDummyShopsArray // Ini adalah array 5 toko dari dummyDataInitializer.ts
-      .map(dummyShop => {
-        // Pastikan toko dummy ini ada di localStorage (seharusnya selalu ada jika initializer berjalan)
-        const persistedShopData = allPersistedShops.find(ps => ps.id === dummyShop.id);
-        return persistedShopData || null; // Kembalikan data dari localStorage, atau null jika tidak ditemukan
-      })
-      .filter((shop): shop is Shop => shop !== null) // Hilangkan yang null (seharusnya tidak terjadi)
-      .filter(shop => {
-        // Cek apakah toko ini memiliki produk di localStorage
-        const shopProductsKey = `${LOCAL_STORAGE_KEYS.SHOP_PRODUCTS_PREFIX}${shop.id}`;
-        const productsString = localStorage.getItem(shopProductsKey);
-        const products: AppProduct[] = productsString ? JSON.parse(productsString) : [];
-        return products.length > 0; // Hanya sertakan jika ada produk
-      })
-      .slice(0, 5); // Pastikan kita hanya mengambil maksimal 5 toko
+      const validShops = Array.isArray(fetchedShopsFromApi) ? fetchedShopsFromApi : [];
 
-    setRelevantShops(shopsToDisplay);
-    setIsLoading(false);
+      // Proses data: pastikan tipe data angka, dan filter toko yang punya produk
+      const processedAndFilteredShops = validShops.map(shop => ({
+        ...shop,
+        id: String(shop.id), // Pastikan ID adalah string jika types.ts mengharapkannya
+        rating: parseFloat(shop.rating as any) || 0,
+        totalRentals: parseInt(shop.totalRentals as any, 10) || 0,
+        // product_count sudah dikirim sebagai angka oleh serializer (IntegerField)
+        // categories adalah array objek Category, sudah sesuai dengan types.ts
+        // gambar (shop.image) seharusnya sudah URL absolut dari serializer jika ada
+      })).filter(shop => shop.product_count > 0); // Filter hanya toko yang memiliki produk
+
+      setAllFetchedShops(processedAndFilteredShops);
+      console.log("[ShopsPage DEBUG] Processed and product-filtered shops set to state:", processedAndFilteredShops);
+
+    } catch (err: any) {
+      console.error("[ShopsPage DEBUG] Error fetching shops from API:", err);
+      const errorMessage = err.response?.data?.detail || err.message || 'Failed to load shops. Please try again.';
+      setError(errorMessage);
+      setAllFetchedShops([]); // Kosongkan data jika error
+    } finally {
+      setIsLoading(false);
+      console.log("[ShopsPage DEBUG] Shop fetching finished. isLoading set to false.");
+    }
   };
 
-  // Memuat data toko saat komponen pertama kali dimuat
   useEffect(() => {
-    loadAndSetDisplayShops();
+    fetchShopsFromAPI();
   }, []);
 
-  // Opsional: Listener untuk memuat ulang saat window mendapat fokus (untuk menangkap perubahan jika ada)
   useEffect(() => {
     const handleFocus = () => {
-      loadAndSetDisplayShops();
+      console.log("[ShopsPage DEBUG] Window focused, re-fetching shops.");
+      fetchShopsFromAPI();
     };
     window.addEventListener('focus', handleFocus);
     return () => {
       window.removeEventListener('focus', handleFocus);
     };
-  }, []);
+  }, []); // Tidak ada dependensi agar hanya setup sekali
 
   // Dapatkan kategori unik dari toko yang akan ditampilkan
-  const categories = Array.from(
-    new Set(relevantShops.flatMap(shop => shop.categories))
+  // `shop.categories` adalah array objek Category, jadi kita ambil `cat.name`
+  const uniqueCategories = Array.from(
+    new Set(allFetchedShops.flatMap(shop => shop.categories.map(cat => cat.name)))
   ).sort();
 
   // Filter toko lebih lanjut berdasarkan input pencarian dan kategori yang dipilih pengguna
-  const filteredShopsToDisplay = relevantShops.filter(shop => {
+  const filteredShopsToDisplay = allFetchedShops.filter(shop => {
     const searchLower = searchQuery.toLowerCase();
-    const matchesSearch = 
+    const matchesSearch =
       shop.name.toLowerCase().includes(searchLower) ||
       shop.description.toLowerCase().includes(searchLower) ||
       shop.location.toLowerCase().includes(searchLower);
-    
-    const matchesCategory = !selectedCategory || shop.categories.includes(selectedCategory);
-    
+
+    // Sesuaikan filter kategori: cek apakah salah satu kategori toko cocok
+    const matchesCategory = !selectedCategory || shop.categories.some(cat => cat.name === selectedCategory);
+
     return matchesSearch && matchesCategory;
   });
 
   if (isLoading) {
-    return <div className="text-center py-10">Loading shops...</div>;
+    return (
+        <div className="text-center py-20">
+            <Loader2 className="h-12 w-12 animate-spin text-primary-600 mx-auto mb-4" />
+            <p className="text-lg text-gray-600">Loading shops...</p>
+        </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="bg-gray-50 min-h-screen pb-16 fade-in">
+        <div className="bg-primary-700 text-white py-10">
+            <div className="container-custom">
+                <h1 className="text-3xl md:text-4xl font-bold mb-2">Browse Shops</h1>
+                <p className="text-primary-100">Discover trusted rental shops in your area</p>
+            </div>
+        </div>
+        <div className="container-custom py-10 text-center">
+          <Store size={48} className="text-red-400 mx-auto mb-4" />
+          <h2 className="text-xl font-semibold text-red-600">Error Loading Shops</h2>
+          <p className="text-gray-600 mt-2 mb-4">{error}</p>
+          <button
+            onClick={() => fetchShopsFromAPI()} // Tombol untuk mencoba lagi
+            className="btn-primary"
+          >
+            Try Again
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -124,17 +161,18 @@ const ShopsPage: React.FC = () => {
                     />
                     <span className="text-sm">All Categories</span>
                   </label>
-                  {categories.map(category => (
-                    <label key={category} className="flex items-center">
+                  {/* Menggunakan uniqueCategories yang sudah diproses */}
+                  {uniqueCategories.map(categoryName => (
+                    <label key={categoryName} className="flex items-center">
                       <input
                         type="radio"
                         name="category"
-                        value={category}
-                        checked={selectedCategory === category}
+                        value={categoryName} // Value adalah nama kategori
+                        checked={selectedCategory === categoryName}
                         onChange={(e) => setSelectedCategory(e.target.value)}
                         className="mr-2 text-primary-600 focus:ring-primary-500"
                       />
-                      <span className="text-sm">{category}</span>
+                      <span className="text-sm">{categoryName}</span>
                     </label>
                   ))}
                 </div>
@@ -147,15 +185,15 @@ const ShopsPage: React.FC = () => {
             {filteredShopsToDisplay.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {filteredShopsToDisplay.map(shop => (
-                  <Link 
+                  <Link
                     key={shop.id}
                     to={`/shops/${shop.id}`}
                     className="bg-white rounded-lg shadow-sm overflow-hidden hover:shadow-md transition-shadow"
                   >
                     <div className="h-48 overflow-hidden">
-                      <img 
-                        src={shop.image || 'https://via.placeholder.com/300x200.png?text=No+Image'} 
-                        alt={shop.name} 
+                      <img
+                        src={shop.image || 'https://via.placeholder.com/300x200.png?text=No+Image'}
+                        alt={shop.name}
                         className="w-full h-full object-cover"
                       />
                     </div>
@@ -167,27 +205,24 @@ const ShopsPage: React.FC = () => {
                           <span className="ml-1 text-sm">{shop.rating.toFixed(1)}</span>
                         </div>
                       </div>
-                      
                       <p className="text-gray-600 text-sm mb-3 line-clamp-2">
                         {shop.description}
                       </p>
-                      
                       <div className="flex items-center text-sm text-gray-500 mb-3">
                         <MapPin size={16} className="mr-1" />
                         {shop.location}
                       </div>
-                      
                       <div className="flex flex-wrap gap-2 mb-4">
-                        {shop.categories.map(category => (
-                          <span 
-                            key={category}
+                        {/* Menampilkan nama kategori dari objek kategori */}
+                        {shop.categories.map(categoryObj => (
+                          <span
+                            key={categoryObj.id} // Gunakan ID kategori jika unik, atau namanya
                             className="bg-primary-50 text-primary-700 px-2 py-1 rounded-full text-xs"
                           >
-                            {category}
+                            {categoryObj.name}
                           </span>
                         ))}
                       </div>
-                      
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-gray-500">
                           {shop.totalRentals} successful rentals
@@ -201,11 +236,14 @@ const ShopsPage: React.FC = () => {
                 ))}
               </div>
             ) : (
-              <div className="text-center py-12">
+              <div className="text-center py-12 bg-white rounded-lg shadow-sm"> {/* Latar belakang ditambahkan */}
                 <Store size={48} className="mx-auto text-gray-400 mb-4" />
                 <h3 className="text-lg font-medium text-gray-900 mb-2">No shops found</h3>
                 <p className="text-gray-600">
-                  Try adjusting your search or filters, or ensure dummy shops have products.
+                  { (searchQuery || selectedCategory)
+                    ? "Try adjusting your search or filters."
+                    : "There are currently no shops with available products. Check back later!"
+                  }
                 </p>
               </div>
             )}

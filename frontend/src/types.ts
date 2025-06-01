@@ -37,6 +37,12 @@ export interface Shop {
   state?: string;      // Sama seperti city
   zip_code?: string;   // MODIFIKASI: dari zip menjadi zip_code
   business_type?: string; // MODIFIKASI: dari businessType menjadi business_type
+  product_count: number; // <--- TAMBAHKAN BARIS INI
+  // Jika dari API bisa jadi tidak selalu ada (meskipun serializer Anda selalu mengirimkannya),
+  // Anda bisa buat opsional: product_count?: number;
+  // Namun, berdasarkan serializer Anda, ini seharusnya selalu ada.
+  created_at?: string; // Tambahkan jika API mengirimkan ini dan Anda butuh
+  updated_at?: string; // Tambahkan jika API mengirimkan ini dan Anda butuh
 }
 
 export interface ProductReview {
