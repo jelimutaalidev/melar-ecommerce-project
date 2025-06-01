@@ -1,19 +1,20 @@
 // frontend/src/pages/ShopDashboardPage.tsx
-import React, { useState, useEffect, useCallback } from 'react'; // Tambahkan useCallback
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import {
   Package, DollarSign, User as UserIcon, Plus,
   ChevronDown, Search, Edit, Trash, ArrowUpRight,
   Store as IconStore, Loader2
 } from 'lucide-react';
-import { useAuth } from '../context/AuthContext';
-import type { AppProduct, ShopOrder, Shop, Category as CategoryType } from '../types';
-import { apiClient } from '../utils/apiClient';
+import { useAuth } from '../context/AuthContext'; //
+import type { AppProduct, ShopOrder, Shop, Category as CategoryType, OrderItem } from '../types'; //
+import { apiClient } from '../utils/apiClient'; //
 
 const ShopDashboardPage: React.FC = () => {
   const { user, isAuthenticated, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const isMountedRef = useRef(true);
 
   console.log("[ShopDashboard] Initial render. User from context:", user, "Auth loading:", authLoading, "Is authenticated:", isAuthenticated);
 
@@ -51,24 +52,21 @@ const ShopDashboardPage: React.FC = () => {
     address: '', zip_code: '', business_type: '', categoryInput: []
   });
 
-  // Pindahkan deklarasi loadDataFromAPI ke luar useEffect dan bungkus dengan useCallback
   const loadDataFromAPI = useCallback(async (currentShopIdParam?: string) => {
-    // Gunakan currentShopIdParam jika ada, jika tidak, coba dari user.shopId
     const shopIdToLoad = currentShopIdParam || user?.shopId;
-
     console.log("[ShopDashboard_LOAD_DATA_CALLBACK] Called. Shop ID to load:", shopIdToLoad);
 
-    if (!shopIdToLoad || !isAuthenticated) { // Ditambahkan !isAuthenticated untuk keamanan
-      setIsLoadingData(false);
+    if (!shopIdToLoad || !isAuthenticated) {
+      if (isMountedRef.current) setIsLoadingData(false);
       console.warn("[ShopDashboard_LOAD_DATA_CALLBACK] Pre-condition failed: No shopId to load or not authenticated.", { shopIdToLoad, isAuthenticated });
-      if (isAuthenticated && user && !shopIdToLoad) {
+      if (isAuthenticated && user && !shopIdToLoad && isMountedRef.current) {
           setDataLoadError("Your shop ID is not available. Please try re-logging or contact support if this persists after shop creation.");
       }
       return;
     }
 
-    setIsLoadingData(true);
-    setDataLoadError(null); // Reset error sebelum load baru
+    if (isMountedRef.current) setIsLoadingData(true);
+    if (isMountedRef.current) setDataLoadError(null);
     console.log(`[ShopDashboard_LOAD_DATA_CALLBACK] Starting data load for shopId: ${shopIdToLoad}`);
 
     try {
@@ -76,59 +74,98 @@ const ShopDashboardPage: React.FC = () => {
       const shopDetailsData: Shop = await apiClient.get(`/shops/${shopIdToLoad}/`);
       console.log("[ShopDashboard_LOAD_DATA_CALLBACK] Raw shopDetailsData from API:", shopDetailsData);
 
-      if (shopDetailsData && shopDetailsData.id) {
-        setShopDetails(shopDetailsData);
-        setShopSettingsForm({
-          name: shopDetailsData.name,
-          description: shopDetailsData.description,
-          location: shopDetailsData.location,
-          phoneNumber: shopDetailsData.phoneNumber || '',
-          address: shopDetailsData.address || '',
-          zip_code: shopDetailsData.zip_code || '',
-          business_type: shopDetailsData.business_type || '',
-          categoryInput: shopDetailsData.categories?.map(cat => cat.name) || [],
-        });
-        console.log("[ShopDashboard_LOAD_DATA_CALLBACK] Shop details successfully set:", shopDetailsData);
-      } else {
-        setShopDetails(null);
-        console.warn(`[ShopDashboard_LOAD_DATA_CALLBACK] Shop details not found or invalid from API for shopId: ${shopIdToLoad}. Response:`, shopDetailsData);
-        setDataLoadError("Shop details could not be loaded from the server.");
+      if (isMountedRef.current) {
+        if (shopDetailsData && shopDetailsData.id) {
+          setShopDetails(shopDetailsData);
+          setShopSettingsForm({
+            name: shopDetailsData.name,
+            description: shopDetailsData.description,
+            location: shopDetailsData.location,
+            phoneNumber: shopDetailsData.phoneNumber || '',
+            address: shopDetailsData.address || '',
+            zip_code: shopDetailsData.zip_code || '',
+            business_type: shopDetailsData.business_type || '',
+            categoryInput: shopDetailsData.categories?.map(cat => cat.name) || [],
+          });
+          console.log("[ShopDashboard_LOAD_DATA_CALLBACK] Shop details successfully set:", shopDetailsData);
+        } else {
+          setShopDetails(null);
+          console.warn(`[ShopDashboard_LOAD_DATA_CALLBACK] Shop details not found or invalid from API for shopId: ${shopIdToLoad}. Response:`, shopDetailsData);
+          setDataLoadError("Shop details could not be loaded from the server."); // Ini akan ditangkap oleh catch utama
+          throw new Error("Shop details could not be loaded from the server."); // Lemparkan error agar masuk ke catch utama
+        }
       }
 
       console.log(`[ShopDashboard_LOAD_DATA_CALLBACK] Fetching shop products for shopId: ${shopIdToLoad}`);
-      const productsData: AppProduct[] = await apiClient.get(`/shops/${shopIdToLoad}/products/`);
-      setShopProducts(productsData || []);
-      console.log(`[ShopDashboard_LOAD_DATA_CALLBACK] Loaded ${productsData?.length || 0} products.`, productsData);
-
-      console.log(`[ShopDashboard_LOAD_DATA_CALLBACK] Fetching shop orders for shopId: ${shopIdToLoad}`);
-      const ordersData: ShopOrder[] = await apiClient.get(`/orders/?shop_id=${shopIdToLoad}`);
-      setShopOrders(ordersData || []);
-      console.log(`[ShopDashboard_LOAD_DATA_CALLBACK] Loaded ${ordersData?.length || 0} orders.`, ordersData);
+      const rawProductsData: any[] = await apiClient.get(`/shops/${shopIdToLoad}/products/`);
+      const productsData: AppProduct[] = (rawProductsData || []).map((p: any) => ({
+        ...p,
+        id: String(p.id),
+        price: parseFloat(p.price),
+        rating: parseFloat(p.rating) || 0,
+        available: typeof p.available === 'boolean' ? p.available : true,
+        total_individual_rentals: parseInt(p.total_individual_rentals, 10) || 0,
+        images: Array.isArray(p.images) ? p.images : [],
+        category: p.category || p.category_name || 'Uncategorized',
+        owner: p.owner_info || { id: String(shopIdToLoad), name: shopDetailsData?.name || 'Shop' }, // Pastikan owner_info ada atau fallback
+        shopId: String(shopIdToLoad) // Pastikan shopId ada di produk
+      }));
+      
+      if (isMountedRef.current) setShopProducts(productsData);
+      console.log(`[ShopDashboard_LOAD_DATA_CALLBACK] Loaded ${productsData?.length || 0} products (price converted).`, productsData);
       
       console.log("[ShopDashboard_LOAD_DATA_CALLBACK] Fetching all categories for settings form.");
       const categoriesData: CategoryType[] = await apiClient.get('/categories/');
-      setAllApiCategories(categoriesData || []);
+      if (isMountedRef.current) setAllApiCategories(categoriesData || []);
       console.log("[ShopDashboard_LOAD_DATA_CALLBACK] All categories loaded for settings:", categoriesData);
 
-    } catch (error: any) {
-      console.error(`[ShopDashboard_LOAD_DATA_CALLBACK] Error loading data for shopId ${shopIdToLoad}:`, error);
-      setDataLoadError(`Error fetching dashboard data: ${error.message || 'Unknown error'}`);
-      setShopDetails(null);
-      setShopProducts([]);
-      setShopOrders([]);
-      setAllApiCategories([]);
-    } finally {
-      setIsLoadingData(false);
-      console.log("[ShopDashboard_LOAD_DATA_CALLBACK] Data loading process finished. isLoadingData set to false.");
-    }
-  // Dependensi untuk useCallback: user (untuk user.shopId), isAuthenticated.
-  // Jika apiClient atau fungsi lain yang dipanggil dari luar juga bisa berubah, tambahkan juga.
-  }, [user, isAuthenticated]); // Jangan sertakan navigate atau location di sini jika tidak diperlukan langsung oleh logika loadDataFromAPI
+      // Panggilan API untuk orders dipisahkan agar errornya tidak mereset data lain secara prematur
+      try {
+          console.log(`[ShopDashboard_LOAD_DATA_CALLBACK] Fetching shop orders for shopId: ${shopIdToLoad}`);
+          // Menggunakan custom action /shops/{shopId}/orders/
+          const rawOrdersData: any[] = await apiClient.get(`/shops/${shopIdToLoad}/orders/`);
+          const ordersData: ShopOrder[] = (rawOrdersData || []).map((o: any) => ({
+            ...o,
+            id: String(o.id),
+            total: parseFloat(o.total),
+            date: o.date, 
+            items: Array.isArray(o.items) ? o.items.map((item: any) => ({
+                ...item,
+                productId: String(item.product || item.productId), 
+                pricePerDay: parseFloat(item.price_per_day_at_rental || item.pricePerDay || 0),
+                quantity: parseInt(item.quantity, 10) || 1,
+            })) : [],
+          }));
+          if (isMountedRef.current) setShopOrders(ordersData);
+          console.log(`[ShopDashboard_LOAD_DATA_CALLBACK] Loaded ${ordersData?.length || 0} orders.`, ordersData);
+      } catch (orderError: any) {
+          console.error(`[ShopDashboard_LOAD_DATA_CALLBACK] Error fetching shop orders for shopId ${shopIdToLoad}:`, orderError);
+          if (isMountedRef.current) {
+              setShopOrders([]);
+              // Opsional: Set error spesifik untuk order jika ingin ditampilkan berbeda
+              // setDataLoadError(prevError => prevError ? `${prevError}\nFailed to load orders: ${orderError.message}` : `Failed to load orders: ${orderError.message}`);
+          }
+      }
 
+    } catch (error: any) { // Menangkap error dari fetch shopDetails, products, atau categories
+      console.error(`[ShopDashboard_LOAD_DATA_CALLBACK] Critical error loading initial dashboard data for shopId ${shopIdToLoad}:`, error);
+      if (isMountedRef.current) {
+        setDataLoadError(`Error fetching crucial dashboard data: ${error.message || 'Unknown error'}`);
+        setShopDetails(null); 
+        setShopProducts([]);
+        setShopOrders([]);
+        setAllApiCategories([]);
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsLoadingData(false);
+        console.log("[ShopDashboard_LOAD_DATA_CALLBACK] Data loading process finished. isLoadingData set to false.");
+      }
+    }
+  }, [user, isAuthenticated]); // Hapus shopId dari sini, karena sudah diambil dari user di dalam useCallback
 
   useEffect(() => {
-    let isMounted = true; // isMounted hanya relevan untuk cleanup async operations dalam effect ini, bukan untuk loadDataFromAPI
-    
+    isMountedRef.current = true;
     console.log(
       "[ShopDashboard_EFFECT] Main effect triggered. User:", user, 
       "Shop ID:", user?.shopId, 
@@ -144,7 +181,7 @@ const ShopDashboardPage: React.FC = () => {
         loadDataFromAPI(user.shopId); 
       } else {
         console.log("[ShopDashboard_EFFECT] Conditions NOT met for initial API call after auth. isAuthenticated:", isAuthenticated, "user:", !!user, "user.shopId:", user?.shopId);
-        if (isMounted) setIsLoadingData(false);
+        if (isMountedRef.current) setIsLoadingData(false);
         if (isAuthenticated && user && !user.shopId) {
            console.log("[ShopDashboard_EFFECT] User is authenticated but doesn't have a shopId yet.");
         }
@@ -153,37 +190,32 @@ const ShopDashboardPage: React.FC = () => {
       console.log("[ShopDashboard_EFFECT] Auth is still loading, initial data load deferred.");
     }
 
-    // Penanganan refresh flag
     const currentRefreshFlags = {
         refreshProducts: location.state?.refreshProducts,
         refreshOrders: location.state?.refreshOrders,
-        refreshRentals: location.state?.refreshRentals, // atau refreshShopData jika itu yang dipakai
+        refreshRentals: location.state?.refreshRentals,
     };
 
     if (Object.values(currentRefreshFlags).some(flag => flag)) {
         const { refreshProducts, refreshOrders, refreshRentals, tab, ...restState } = location.state || {};
-        if (isMounted && (refreshProducts || refreshOrders || refreshRentals)) { // Cek isMounted di sini karena ada async operation (loadDataFromAPI)
+        if (isMountedRef.current && (refreshProducts || refreshOrders || refreshRentals)) {
             console.log("[ShopDashboard_EFFECT] Refresh flag detected, preparing to re-load data from API.", currentRefreshFlags);
-            if (!authLoading && isAuthenticated && user?.shopId) { // Hanya reload jika user dan shopId valid
+            if (!authLoading && isAuthenticated && user?.shopId) {
                 console.log("[ShopDashboard_EFFECT] Calling loadDataFromAPI due to refresh flag with shopId:", user.shopId);
                 loadDataFromAPI(user.shopId);
             } else {
                 console.log("[ShopDashboard_EFFECT] Refresh flag, but conditions for API call not met during refresh check.");
             }
         }
-        // Membersihkan state navigasi hanya jika ada flag refresh
-        // Lakukan ini di luar pengecekan isMounted untuk loadDataFromAPI agar state selalu dibersihkan
-        navigate(location.pathname, { state: restState, replace: true });
+        if (isMountedRef.current) navigate(location.pathname, { state: restState, replace: true });
     }
 
     return () => {
-      isMounted = false; // Ini akan menghentikan set state di dalam async ops jika komponen unmount sebelum selesai
+      isMountedRef.current = false;
       console.log("[ShopDashboard_EFFECT] Cleanup. Component unmounted or dependencies changed.");
     };
-  }, [user, isAuthenticated, authLoading, location.key, location.state, navigate, loadDataFromAPI]); // Tambahkan loadDataFromAPI sebagai dependensi
+  }, [user, isAuthenticated, authLoading, location.key, location.state, navigate, loadDataFromAPI]);
 
-
-  // ... (Sisa fungsi handler seperti handleItemSelect, handleDeleteSelected, dll. TETAP SAMA) ...
   const handleItemSelect = (productId: string) => {
     setSelectedItems(prev => prev.includes(productId) ? prev.filter(id => id !== productId) : [...prev, productId]);
   };
@@ -201,11 +233,9 @@ const ShopDashboardPage: React.FC = () => {
         await apiClient.delete(`/products/${productIdToDelete}/`);
         console.log(`[ShopDashboard] Product ${productIdToDelete} deleted via API.`);
       }
-      // Re-fetch products after deletion
-      if (user?.shopId) {
+      if (user?.shopId && isMountedRef.current) {
         console.log("[ShopDashboard] Re-fetching products after deletion.");
-        const productsData: AppProduct[] = await apiClient.get(`/shops/${user.shopId}/products/`);
-        setShopProducts(productsData || []);
+        loadDataFromAPI(user.shopId); 
       }
       setSelectedItems([]);
       setShowDeleteModal(false);
@@ -218,26 +248,35 @@ const ShopDashboardPage: React.FC = () => {
        }
       alert(errorMessage);
     } finally {
-      setIsSubmitting(false);
+      if (isMountedRef.current) setIsSubmitting(false);
     }
   };
 
-  const filteredProducts = shopProducts.filter(product => {
+  const filteredProducts = (shopProducts || []).filter(product => {
+    if (!product || typeof product.name !== 'string') return false;
     const searchLower = searchQuery.toLowerCase();
     const nameMatch = product.name.toLowerCase().includes(searchLower);
-    const categoryMatch = product.category && product.category.toLowerCase().includes(searchLower);
+    const categoryMatch = product.category && typeof product.category === 'string' && product.category.toLowerCase().includes(searchLower);
     const matchesSearch = nameMatch || categoryMatch;
-    const productStatus = product.status || (product.available ? 'available' : 'rented');
-    const matchesStatus = statusFilter === 'all' || productStatus === statusFilter;
+    const productStatusKey = product.status || (product.available ? 'available' : 'rented');
+    const matchesStatus = statusFilter === 'all' || productStatusKey === statusFilter;
     return matchesSearch && matchesStatus;
   });
 
-  const filteredOrders = shopOrders.filter(order => {
+  const filteredOrders = (shopOrders || []).filter(order => {
     const searchLower = orderSearchQuery.toLowerCase();
-    return order.id.toLowerCase().includes(searchLower) ||
-           order.customerName.toLowerCase().includes(searchLower) ||
-           order.items.some(item => item.name.toLowerCase().includes(searchLower));
-  }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    const idMatch = order?.id?.toLowerCase().includes(searchLower) ?? false;
+    const customerNameMatch = order?.customerName?.toLowerCase().includes(searchLower) ?? false;
+    const itemsMatch = (order?.items || []).some(item => item?.name?.toLowerCase().includes(searchLower) ?? false);
+    return idMatch || customerNameMatch || itemsMatch;
+  }).sort((a, b) => {
+    const dateA = new Date(a.date).getTime();
+    const dateB = new Date(b.date).getTime();
+    if (isNaN(dateA) && isNaN(dateB)) return 0;
+    if (isNaN(dateA)) return 1; 
+    if (isNaN(dateB)) return -1;
+    return dateB - dateA;
+  });
 
   const handleShopSettingsChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -286,36 +325,45 @@ const ShopDashboardPage: React.FC = () => {
       address: shopSettingsForm.address,
       zip_code: shopSettingsForm.zip_code,
       business_type: shopSettingsForm.business_type,
-      category_ids: categoryIdsToSubmit,
     };
+    // Hanya kirim category_ids jika ada perubahan atau memang ingin di-set
+    const currentDetailCategoryIds = shopDetails.categories.map(c => Number(c.id)).sort();
+    const newPayloadCategoryIds = categoryIdsToSubmit.sort();
+    if (JSON.stringify(currentDetailCategoryIds) !== JSON.stringify(newPayloadCategoryIds)) {
+        payload.category_ids = categoryIdsToSubmit;
+    }
     
     Object.keys(payload).forEach(key => {
-      const K = key as keyof typeof payload;
-      if (payload[K] === undefined || payload[K] === '') {
-        if (K !== 'category_ids') {
-             delete payload[K];
-        } else if (Array.isArray(payload[K]) && (payload[K] as any[]).length === 0) {
-            // Tetap kirim array kosong jika itu yang diinginkan backend untuk reset kategori
+        const K = key as keyof typeof payload;
+        if (payload[K] === undefined || payload[K] === '' || (shopDetails && payload[K] === shopDetails[K as keyof Shop])) {
+            if (K !== 'category_ids') { // Jangan hapus category_ids jika sudah di-set di atas
+                 delete payload[K];
+            }
         }
-      }
     });
-    console.log("[ShopDashboard] Payload for API PATCH:", payload);
+    if (Object.keys(payload).length === 0) {
+        alert("No changes detected to save.");
+        if(isMountedRef.current) setIsSubmitting(false);
+        return;
+    }
+    console.log("[ShopDashboard] Payload for API PATCH (after cleaning):", payload);
 
     try {
       const updatedShopFromApi: Shop = await apiClient.patch(`/shops/${user.shopId}/`, payload);
       console.log("[ShopDashboard] Shop settings updated via API, response:", updatedShopFromApi);
-
-      setShopDetails(updatedShopFromApi); // Update detail toko dengan data terbaru
-      setShopSettingsForm({ // Update juga form dengan data terbaru
-          name: updatedShopFromApi.name,
-          description: updatedShopFromApi.description,
-          location: updatedShopFromApi.location,
-          phoneNumber: updatedShopFromApi.phoneNumber || '',
-          address: updatedShopFromApi.address || '',
-          zip_code: updatedShopFromApi.zip_code || '',
-          business_type: updatedShopFromApi.business_type || '',
-          categoryInput: updatedShopFromApi.categories?.map(cat => cat.name) || [],
-      });
+      if (isMountedRef.current) {
+        setShopDetails(updatedShopFromApi);
+        setShopSettingsForm({
+            name: updatedShopFromApi.name,
+            description: updatedShopFromApi.description,
+            location: updatedShopFromApi.location,
+            phoneNumber: updatedShopFromApi.phoneNumber || '',
+            address: updatedShopFromApi.address || '',
+            zip_code: updatedShopFromApi.zip_code || '',
+            business_type: updatedShopFromApi.business_type || '',
+            categoryInput: updatedShopFromApi.categories?.map(cat => cat.name) || [],
+        });
+      }
       alert('Shop settings saved!');
     } catch (error: any) {
       console.error("[ShopDashboard] Error updating shop settings via API:", error);
@@ -327,11 +375,11 @@ const ShopDashboardPage: React.FC = () => {
       }
       alert(errorMessage);
     } finally {
-      setIsSubmitting(false);
+      if (isMountedRef.current) setIsSubmitting(false);
     }
   };
 
-  // --- Bagian Render ---
+  // --- KODE JSX ---
   if (authLoading) {
     return <div className="text-center py-20"><Loader2 className="h-8 w-8 animate-spin text-primary-600 mx-auto" /> Authenticating...</div>;
   }
@@ -406,10 +454,9 @@ const ShopDashboardPage: React.FC = () => {
     navigate(`/shop-dashboard/edit-product/${productId}`, { state: { shopId: user?.shopId, shopName: shopDetails?.name } });
   };
 
-  const totalRevenue = filteredOrders.reduce((sum, order) => order.status === 'completed' ? sum + order.total : sum, 0);
-  const activeRentalsCount = shopProducts.filter(p => p.status === 'rented' || (p.hasOwnProperty('available') && !p.available)).length;
+  const totalRevenue = filteredOrders.reduce((sum, order) => order.status === 'completed' && typeof order.total === 'number' ? sum + order.total : sum, 0);
+  const activeRentalsCount = (shopProducts || []).filter(p => p.status === 'rented' || (p.hasOwnProperty('available') && !p.available)).length;
 
-  // ... (Sisa JSX sama seperti sebelumnya)
   return (
     <div className="bg-gray-50 min-h-screen pb-16 fade-in">
       <div className="bg-primary-700 text-white py-8">
@@ -436,7 +483,7 @@ const ShopDashboardPage: React.FC = () => {
         <div className="bg-white rounded-lg shadow-sm mb-8">
           <div className="flex overflow-x-auto">
             <button onClick={() => setActiveTab('dashboard')} className={`px-4 py-3 font-medium text-sm whitespace-nowrap ${activeTab === 'dashboard' ? 'text-primary-600 border-b-2 border-primary-600' : 'text-gray-500 hover:text-gray-700'}`}>Dashboard</button>
-            <button onClick={() => setActiveTab('products')} className={`px-4 py-3 font-medium text-sm whitespace-nowrap ${activeTab === 'products' ? 'text-primary-600 border-b-2 border-primary-600' : 'text-gray-500 hover:text-gray-700'}`}>Products ({shopProducts.length})</button>
+            <button onClick={() => setActiveTab('products')} className={`px-4 py-3 font-medium text-sm whitespace-nowrap ${activeTab === 'products' ? 'text-primary-600 border-b-2 border-primary-600' : 'text-gray-500 hover:text-gray-700'}`}>Products ({(shopProducts || []).length})</button>
             <button onClick={() => setActiveTab('orders')} className={`px-4 py-3 font-medium text-sm whitespace-nowrap ${activeTab === 'orders' ? 'text-primary-600 border-b-2 border-primary-600' : 'text-gray-500 hover:text-gray-700'}`}>Orders ({filteredOrders.length})</button>
             <button onClick={() => setActiveTab('settings')} className={`px-4 py-3 font-medium text-sm whitespace-nowrap ${activeTab === 'settings' ? 'text-primary-600 border-b-2 border-primary-600' : 'text-gray-500 hover:text-gray-700'}`}>Shop Settings</button>
           </div>
@@ -447,7 +494,7 @@ const ShopDashboardPage: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="bg-white rounded-lg shadow-sm p-6 flex items-center">
                 <div className="p-3 rounded-md bg-primary-100 text-primary-600 mr-4"><Package size={24} /></div>
-                <div><p className="text-sm font-medium text-gray-500">Total Products</p><h3 className="text-2xl font-semibold">{shopProducts.length}</h3></div>
+                <div><p className="text-sm font-medium text-gray-500">Total Products</p><h3 className="text-2xl font-semibold">{(shopProducts || []).length}</h3></div>
               </div>
               <div className="bg-white rounded-lg shadow-sm p-6 flex items-center">
                 <div className="p-3 rounded-md bg-blue-100 text-blue-600 mr-4"><DollarSign size={24} /></div>
@@ -459,7 +506,7 @@ const ShopDashboardPage: React.FC = () => {
               </div>
               <div className="bg-white rounded-lg shadow-sm p-6 flex items-center">
                 <div className="p-3 rounded-md bg-purple-100 text-purple-600 mr-4"><UserIcon size={24} /></div>
-                <div><p className="text-sm font-medium text-gray-500">Total Orders</p><h3 className="text-2xl font-semibold">{shopOrders.length}</h3></div>
+                <div><p className="text-sm font-medium text-gray-500">Total Orders</p><h3 className="text-2xl font-semibold">{(shopOrders || []).length}</h3></div>
               </div>
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -485,7 +532,7 @@ const ShopDashboardPage: React.FC = () => {
                  <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50"><tr><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Order ID</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total</th></tr></thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {filteredOrders.slice(0, 3).map((order) => ( <tr key={order.id} className="hover:bg-gray-50"><td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{order.id}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{order.customerName}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{new Date(order.date).toLocaleDateString()}</td><td className="px-6 py-4 whitespace-nowrap"><span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${order.status === 'active' || order.status === 'confirmed' ? 'bg-green-100 text-green-800' : order.status === 'completed' ? 'bg-blue-100 text-blue-800' : order.status === 'cancelled' ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'}`}>{order.status.charAt(0).toUpperCase() + order.status.slice(1)}</span></td><td className="px-6 py-4 whitespace-nowrap text-sm font-medium">${order.total.toFixed(2)}</td></tr>))}
+                    {filteredOrders.slice(0, 3).map((order) => ( <tr key={order.id} className="hover:bg-gray-50"><td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{order.id}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{order.customerName}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{new Date(order.date).toLocaleDateString()}</td><td className="px-6 py-4 whitespace-nowrap"><span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${order.status === 'active' || order.status === 'confirmed' ? 'bg-green-100 text-green-800' : order.status === 'completed' ? 'bg-blue-100 text-blue-800' : order.status === 'cancelled' ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'}`}>{order.status.charAt(0).toUpperCase() + order.status.slice(1)}</span></td><td className="px-6 py-4 whitespace-nowrap text-sm font-medium">${typeof order.total === 'number' ? order.total.toFixed(2) : 'N/A'}</td></tr>))}
                   </tbody>
                 </table>
               </div>
@@ -512,9 +559,9 @@ const ShopDashboardPage: React.FC = () => {
             {selectedItems.length > 0 && (<div className="bg-gray-50 px-6 py-3 border-b flex items-center justify-between"><span className="text-sm text-gray-700">{selectedItems.length} item(s) selected</span><button onClick={() => setShowDeleteModal(true)} className="text-red-600 text-sm font-medium hover:text-red-700 flex items-center" disabled={isSubmitting || isLoadingData}><Trash size={16} className="mr-1" /> Delete Selected</button></div>)}
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50"><tr><th className="pl-6 pr-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"><input type="checkbox" checked={filteredProducts.length > 0 && selectedItems.length === filteredProducts.length} onChange={handleSelectAll} disabled={filteredProducts.length === 0 || isSubmitting || isLoadingData} className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"/></th><th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Product</th><th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Category</th><th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th><th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th><th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Rentals</th><th className="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th></tr></thead>
+                <thead className="bg-gray-50"><tr><th className="pl-6 pr-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"><input type="checkbox" checked={filteredProducts.length > 0 && selectedItems.length === filteredProducts.length && filteredProducts.length > 0} onChange={handleSelectAll} disabled={filteredProducts.length === 0 || isSubmitting || isLoadingData} className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"/></th><th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Product</th><th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Category</th><th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th><th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th><th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Rentals</th><th className="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th></tr></thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {filteredProducts.map((product) => (<tr key={product.id} className="hover:bg-gray-50"><td className="pl-6 pr-3 py-4 whitespace-nowrap"><input type="checkbox" checked={selectedItems.includes(product.id)} onChange={() => handleItemSelect(product.id)} className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"/></td><td className="px-3 py-4 whitespace-nowrap"><div className="flex items-center"><div className="h-10 w-10 flex-shrink-0 rounded-md overflow-hidden bg-gray-100"><img src={product.images?.[0] || 'https://via.placeholder.com/40x40.png?text=N/A'} alt={product.name} className="h-10 w-10 object-cover" /></div><div className="ml-4"><div className="text-sm font-medium text-gray-900">{product.name}</div></div></div></td><td className="px-3 py-4 whitespace-nowrap text-sm text-gray-500">{product.category}</td><td className="px-3 py-4 whitespace-nowrap text-sm font-medium">${product.price.toFixed(2)}</td><td className="px-3 py-4 whitespace-nowrap"><span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${(product.status || (product.available ? 'available' : 'rented')) === 'available' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}>{(product.status || (product.available ? 'available' : 'rented')) === 'available' ? 'Available' : 'Rented Out'}</span></td><td className="px-3 py-4 whitespace-nowrap text-sm text-gray-500">{product.total_individual_rentals || 0}</td><td className="px-3 py-4 whitespace-nowrap text-right text-sm font-medium"><div className="flex justify-end space-x-2"><button onClick={() => handleEditProduct(product.id)} className="text-primary-600 hover:text-primary-700 p-1 rounded hover:bg-primary-50" title="Edit Product" disabled={isSubmitting || isLoadingData}><Edit size={16} /></button><button onClick={() => {setSelectedItems([product.id]); setShowDeleteModal(true);}} className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50" title="Delete Product" disabled={isSubmitting || isLoadingData}><Trash size={16} /></button></div></td></tr>))}
+                  {filteredProducts.map((product) => (<tr key={product.id} className="hover:bg-gray-50"><td className="pl-6 pr-3 py-4 whitespace-nowrap"><input type="checkbox" checked={selectedItems.includes(product.id)} onChange={() => handleItemSelect(product.id)} className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"/></td><td className="px-3 py-4 whitespace-nowrap"><div className="flex items-center"><div className="h-10 w-10 flex-shrink-0 rounded-md overflow-hidden bg-gray-100"><img src={product.images?.[0] || 'https://via.placeholder.com/40x40.png?text=N/A'} alt={product.name} className="h-10 w-10 object-cover" /></div><div className="ml-4"><div className="text-sm font-medium text-gray-900">{product.name}</div></div></div></td><td className="px-3 py-4 whitespace-nowrap text-sm text-gray-500">{product.category}</td><td className="px-3 py-4 whitespace-nowrap text-sm font-medium">${typeof product.price === 'number' ? product.price.toFixed(2) : 'N/A'}</td><td className="px-3 py-4 whitespace-nowrap"><span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${(product.status || (product.available ? 'available' : 'rented')) === 'available' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}>{(product.status || (product.available ? 'available' : 'rented')) === 'available' ? 'Available' : 'Rented Out'}</span></td><td className="px-3 py-4 whitespace-nowrap text-sm text-gray-500">{product.total_individual_rentals || 0}</td><td className="px-3 py-4 whitespace-nowrap text-right text-sm font-medium"><div className="flex justify-end space-x-2"><button onClick={() => handleEditProduct(product.id)} className="text-primary-600 hover:text-primary-700 p-1 rounded hover:bg-primary-50" title="Edit Product" disabled={isSubmitting || isLoadingData}><Edit size={16} /></button><button onClick={() => {setSelectedItems([product.id]); setShowDeleteModal(true);}} className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50" title="Delete Product" disabled={isSubmitting || isLoadingData}><Trash size={16} /></button></div></td></tr>))}
                 </tbody>
               </table>
             </div>
@@ -545,7 +592,7 @@ const ShopDashboardPage: React.FC = () => {
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{new Date(order.date).toLocaleDateString()}</td>
                         <td className="px-6 py-4 text-sm text-gray-500 max-w-xs truncate" title={order.items.map(item => item.name).join(', ')}>{order.items.map(item => item.name).join(', ')}</td>
                         <td className="px-6 py-4 whitespace-nowrap"><span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${order.status === 'active' || order.status === 'confirmed' ? 'bg-green-100 text-green-800' : order.status === 'completed' ? 'bg-blue-100 text-blue-800' :  order.status === 'cancelled' ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'}`}>{order.status.charAt(0).toUpperCase() + order.status.slice(1)}</span></td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">${order.total.toFixed(2)}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">${typeof order.total === 'number' ? order.total.toFixed(2) : 'N/A'}</td>
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                            <Link to={`/shop-dashboard/orders/${order.id}`} className="text-primary-600 hover:text-primary-700">View Details</Link>
                         </td>
