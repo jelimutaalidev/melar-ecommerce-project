@@ -27,7 +27,7 @@ class UserSerializer(serializers.ModelSerializer):
 class UserProfileSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     has_shop = serializers.BooleanField(read_only=True)
-    shop_id = serializers.IntegerField(read_only=True, source='shop_id', allow_null=True) # source dari property
+    shop_id = serializers.IntegerField(read_only=True, allow_null=True) # source dari property
 
     class Meta:
         model = UserProfile
@@ -210,10 +210,11 @@ class ProductInfoForCartSerializer(serializers.ModelSerializer):
     """
     main_image = serializers.SerializerMethodField()
     shop_name = serializers.CharField(source='shop.name', read_only=True)
+    shop_id = serializers.IntegerField(source='shop.id', read_only=True)
 
     class Meta:
         model = AppProduct
-        fields = ['id', 'name', 'price', 'main_image', 'shop_name'] # Sesuaikan field sesuai kebutuhan frontend
+        fields = ['id', 'name', 'price', 'main_image', 'shop_name', 'shop_id'] # Sesuaikan field sesuai kebutuhan frontend
 
     def get_main_image(self, obj):
         request = self.context.get('request')

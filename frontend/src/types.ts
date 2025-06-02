@@ -2,23 +2,22 @@
 
 export interface User {
   id: string;
-  name: string;
+  name: string; // Ini bisa jadi gabungan first_name dan last_name atau display name
   email: string;
-  username?: string;
-  first_name?: string;
-  last_name?: string;
+  username?: string; // Biasanya ada dari Django User model
+  first_name?: string; // <-- DARI API BACKEND (snake_case)
+  last_name?: string;  // <-- DARI API BACKEND (snake_case)
   hasShop: boolean;
   shopId?: string;
-  shop?: Shop; // Jika Anda memutuskan untuk menyematkan objek Shop
-  phone?: string;
-  address?: string;
+  shop?: Shop; 
+  phone?: string;   // Pastikan ini ada jika AuthContext mencoba mengisinya
+  address?: string; // Pastikan ini ada jika AuthContext mencoba mengisinya
 }
 
-// TAMBAHKAN/MODIFIKASI TIPE Category
 export interface Category {
-  id: string | number; // ID bisa berupa string atau number tergantung backend Anda
+  id: string | number; 
   name: string;
-  description?: string; // Opsional, sesuaikan dengan serializer Anda
+  description?: string;
 }
 
 export interface Shop {
@@ -29,27 +28,28 @@ export interface Shop {
   rating: number;
   totalRentals: number;
   image: string | null;
-  categories: Category[]; // MODIFIKASI: dari string[] menjadi Category[]
-  ownerId: string; // Ini merujuk ke User.id pemilik
-  phoneNumber?: string;
+  categories: Category[]; 
+  ownerId: string; 
+  phone_number?: string; // Pastikan field ini ada jika Anda ingin menggunakannya untuk WA
   address?: string;
-  city?: string;       // Tetap ada jika Anda menggunakannya di frontend, meskipun backend mungkin menyimpannya dalam 'location'
-  state?: string;      // Sama seperti city
-  zip_code?: string;   // MODIFIKASI: dari zip menjadi zip_code
-  business_type?: string; // MODIFIKASI: dari businessType menjadi business_type
-  product_count: number; // <--- TAMBAHKAN BARIS INI
-  // Jika dari API bisa jadi tidak selalu ada (meskipun serializer Anda selalu mengirimkannya),
-  // Anda bisa buat opsional: product_count?: number;
-  // Namun, berdasarkan serializer Anda, ini seharusnya selalu ada.
-  created_at?: string; // Tambahkan jika API mengirimkan ini dan Anda butuh
-  updated_at?: string; // Tambahkan jika API mengirimkan ini dan Anda butuh
+  city?: string;
+  state?: string;
+  zip_code?: string;
+  business_type?: string;
+  product_count: number; 
+  created_at?: string; 
+  updated_at?: string; 
 }
 
 export interface ProductReview {
-  user: string; // Seharusnya ini bisa objek User atau string nama user
+  // Jika user adalah objek User sederhana dari backend (misal hanya id dan username)
+  // Anda bisa mendefinisikan tipe UserBasicInfo di sini
+  // Untuk sekarang, asumsikan user adalah string username atau ID user.
+  user: string | { id: string | number; username: string; first_name?: string; last_name?: string; };
   rating: number;
   comment: string;
-  date: string; // Sebaiknya gunakan tipe Date atau string ISO
+  date: string; 
+  id?: string | number; // Review biasanya punya ID sendiri
 }
 
 export interface AppProduct {
@@ -58,34 +58,42 @@ export interface AppProduct {
   description: string;
   price: number;
   images: string[];
-  category: string; // Ini akan menjadi NAMA kategori (string) dari backend setelah serialisasi
+  category: string; // Nama kategori
   rating: number;
   available: boolean;
-  owner: { // Ini adalah owner_info dari serializer backend
-    id: string; // Ini adalah shopId
-    name: string; // Ini adalah shopName
+  owner: { // Ini adalah owner_info dari serializer backend (biasanya info toko)
+    id: string; // ID Toko
+    name: string; // Nama Toko
   };
-  shopId?: string; // ID toko tempat produk ini berada
+  shopId?: string; // Bisa redundan jika owner.id adalah shopId, tapi bagus untuk kejelasan
   reviews?: ProductReview[];
-  status?: 'available' | 'rented' | 'maintenance' | 'archived'; // Sesuaikan dengan backend jika ada
-  total_individual_rentals?: number; // MODIFIKASI: dari rentals menjadi total_individual_rentals
+  status?: 'available' | 'rented' | 'maintenance' | 'archived';
+  total_individual_rentals?: number;
+  // Tambahkan field lain yang mungkin dikirim oleh AppProductSerializer Anda
+  shop_name?: string; // Dari AppProductSerializer
+  category_name?: string; // Dari AppProductSerializer (meskipun category sudah ada)
+  owner_info?: { id: string; name: string; }; // Jika API masih mengirim ini dan belum di-map ke 'owner'
 }
 
 export interface HomePageCategoryDisplay {
   id: string;
   name: string;
-  count: number;
+  count: number; // Jumlah toko atau produk dalam kategori ini
   image: string;
 }
 
+// Tipe untuk item di dalam pesanan (ShopOrder atau RentalOrder backend)
+// Sesuaikan dengan OrderItemSerializer Anda di backend
 export interface OrderItem {
-  productId: string; // ID produk
-  name: string;      // Nama produk
+  productId: string; 
+  name: string;      
   quantity: number;
-  pricePerDay: number; // Harga per hari produk saat itu
-  image?: string;    // URL gambar utama produk
-  // Backend OrderItemSerializer juga memiliki: product, product_name, product_image, price_per_day_at_rental, start_date, end_date, item_total
-  // Sesuaikan jika perlu lebih detail di sini.
+  pricePerDay: number; 
+  image?: string;      
+  // Tambahan dari OrderItem model backend Anda
+  startDate?: string; // Jika setiap item bisa punya periode sewa sendiri
+  endDate?: string;   // Jika setiap item bisa punya periode sewa sendiri
+  item_total?: number; // Jika backend mengirimkan subtotal per item
 }
 
 export interface RentalPeriod {
@@ -93,17 +101,28 @@ export interface RentalPeriod {
   endDate: string;
 }
 
-export interface ShopOrder {
+// Definisikan tipe untuk status pesanan yang diizinkan
+export type OrderStatus = 
+  | 'pending' 
+  | 'confirmed' 
+  | 'rented_out' // atau 'active' jika itu yang Anda gunakan
+  | 'completed' 
+  | 'cancelled' 
+  | 'active'      // Sudah ada, pastikan konsisten dengan 'rented_out'
+  | 'pending_whatsapp'; // <-- STATUS BARU DITAMBAHKAN
+
+export interface ShopOrder { // Ini lebih seperti "Pesanan yang diterima oleh Toko"
   id: string;
-  customerId: string;
-  customerName: string;
-  date: string; // Sebaiknya gunakan tipe Date atau string ISO
+  customerId: string; // ID User yang memesan
+  customerName: string; // Nama User yang memesan
+  date: string; 
   items: OrderItem[];
-  rentalPeriod: RentalPeriod; // Mungkin perlu disesuaikan jika rental period per item
-  shopId: string;
-  status: 'pending' | 'confirmed' | 'rented_out' | 'completed' | 'cancelled' | 'active'; // Sesuaikan
+  // Jika semua item dalam satu ShopOrder HARUS memiliki periode sewa yang sama:
+  rentalPeriod: RentalPeriod; 
+  shopId: string; // ID Toko yang menerima pesanan ini
+  status: OrderStatus; // Menggunakan tipe OrderStatus yang sudah didefinisikan
   total: number;
-  shippingAddress?: {
+  shippingAddress?: { // Alamat pengiriman/billing dari form checkout
     firstName: string;
     lastName: string;
     email: string;
@@ -111,21 +130,23 @@ export interface ShopOrder {
     address: string;
     city: string;
     state: string;
-    zip: string; // Di sini bisa tetap 'zip' jika form billing menggunakan itu
+    zip: string; 
   };
+  // Field tambahan yang mungkin ada di RentalOrder backend Anda
+  payment_reference?: string;
 }
 
-export interface UserRental {
-  id: string; // ID dari UserRental itu sendiri (jika ada modelnya) atau OrderId
-  orderId: string;
-  product: string; // Bisa jadi array nama produk jika satu pesanan banyak item, atau nama produk utama
+export interface UserRental { // Ini lebih seperti "Histori Sewa dari sisi Pengguna"
+  id: string; 
+  orderId: string; // Merujuk ke ID ShopOrder atau RentalOrder backend
+  product: string; // Deskripsi produk (bisa nama, atau gabungan nama jika >1)
   shopName: string;
   shopId?: string;
-  image: string; // Gambar produk utama atau representatif
-  status: 'pending' | 'confirmed' | 'rented_out' | 'completed' | 'cancelled' | 'active'; // Sesuaikan
+  image: string; 
+  status: OrderStatus; // Menggunakan tipe OrderStatus
   startDate: string;
   endDate: string;
   total: number;
-  items: OrderItem[]; // Daftar item dalam rental ini
-  customerId: string;
+  items: OrderItem[]; 
+  customerId: string; // Untuk memastikan ini milik user yang login
 }

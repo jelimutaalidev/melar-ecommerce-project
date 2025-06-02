@@ -81,27 +81,78 @@ admin.site.register(AppProduct, AppProductAdmin)
 
 # Kustomisasi untuk Shop
 class ShopAdmin(admin.ModelAdmin):
-    list_display = ('name', 'owner_username', 'location', 'rating', 'total_rentals', 'product_count_in_shop', 'created_at')
-    list_filter = ('location', 'business_type', 'categories')
-    search_fields = ('name', 'description', 'owner__username')
-    filter_horizontal = ('categories',) 
-    list_select_related = ('owner',) 
-    readonly_fields = ('image_preview_admin',)
+    list_display = (
+        'name',
+        'owner_username',
+        'location',
+        'phone_number', # Ditambahkan
+        'business_type', # Ditambahkan
+        'rating',
+        'total_rentals',
+        'product_count_in_shop',
+        'created_at_formatted', # Menggunakan format kustom
+        'updated_at_formatted'  # Ditambahkan dan diformat
+    )
+    list_filter = ('location', 'business_type', 'categories', 'rating') # Rating bisa ditambahkan ke filter
+    search_fields = ('name', 'description', 'owner__username', 'phone_number', 'address') # Ditambahkan phone_number dan address
+    filter_horizontal = ('categories',)
+    list_select_related = ('owner',)
     ordering = ('-created_at',)
+
+    # Mengatur field yang tampil di halaman detail/edit menggunakan fieldsets
+    fieldsets = (
+        (None, {
+            'fields': ('name', 'owner', 'description', 'image', 'image_preview_admin')
+        }),
+        ('Contact & Location Information', {
+            'fields': ('phone_number', 'address', 'location', 'zip_code')
+        }),
+        ('Categorization & Type', {
+            'fields': ('categories', 'business_type')
+        }),
+        ('Statistics & Timestamps (Read-only)', {
+            'classes': ('collapse',), # Bisa disembunyikan secara default
+            'fields': ('rating', 'total_rentals', 'product_count_display', 'created_at', 'updated_at')
+        }),
+    )
+
+    readonly_fields = (
+        'image_preview_admin',
+        'rating', # Umumnya rating dihitung dari review
+        'total_rentals', # Umumnya diupdate by system
+        'product_count_display', # Tampilan jumlah produk di detail
+        'created_at',
+        'updated_at'
+    )
 
     def owner_username(self, obj):
         return obj.owner.username
     owner_username.short_description = 'Owner'
+    owner_username.admin_order_field = 'owner__username' # Memungkinkan sorting berdasarkan username owner
 
     def product_count_in_shop(self, obj):
-        return obj.products.count() 
-    product_count_in_shop.short_description = 'Products'
+        return obj.products.count()
+    product_count_in_shop.short_description = 'Products (List)'
+
+    def product_count_display(self, obj): # Untuk tampilan di fieldsets (detail view)
+        return obj.products.count()
+    product_count_display.short_description = 'Number of Products'
 
     def image_preview_admin(self, obj):
-        if obj.image:
+        if obj.image and hasattr(obj.image, 'url'): # Pastikan image ada dan punya URL
             return format_html('<img src="{}" width="150" height="auto" />', obj.image.url)
         return "(No image)"
     image_preview_admin.short_description = 'Logo Preview'
+
+    def created_at_formatted(self, obj):
+        return obj.created_at.strftime('%Y-%m-%d %H:%M')
+    created_at_formatted.short_description = 'Created At'
+    created_at_formatted.admin_order_field = 'created_at'
+
+    def updated_at_formatted(self, obj):
+        return obj.updated_at.strftime('%Y-%m-%d %H:%M')
+    updated_at_formatted.short_description = 'Last Updated'
+    updated_at_formatted.admin_order_field = 'updated_at'
 
 admin.site.register(Shop, ShopAdmin)
 

@@ -1,4 +1,5 @@
 // src/App.tsx
+import React, { Suspense, lazy } from 'react'; // <-- PASTIKAN 'lazy' ADA DI SINI
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Layout from './components/layout/Layout';
 import HomePage from './pages/HomePage';
@@ -20,6 +21,7 @@ import NotFoundPage from './pages/NotFoundPage';
 import { AuthProvider } from './context/AuthContext';
 import { CartProvider } from './context/CartContext';
 import ScrollToTop from './components/ScrollToTop';
+const WhatsAppOrderSentPage = lazy(() => import('./pages/WhatsAppOrderSentPage'));
 
 function App() {
   return (
@@ -36,6 +38,7 @@ function App() {
               <Route path="shops/:shopId" element={<ShopDetailPage />} />
               <Route path="cart" element={<CartPage />} />
               <Route path="checkout" element={<CheckoutPage />} />
+              <Route path="whatsapp-order-sent" element={<WhatsAppOrderSentPage />} />
               <Route path="profile" element={<ProfilePage />} />
               <Route path="profile/orders/:orderId" element={<OrderDetailPage />} /> {/* Rute untuk detail pesanan buyer */}
               <Route path="create-shop" element={<ShopCreationPage />} />

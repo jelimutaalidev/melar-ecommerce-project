@@ -1,101 +1,176 @@
 // src/pages/HomePage.tsx
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Search, ShieldCheck, Store, Clock, Star } from 'lucide-react';
+import { Search, ShieldCheck, Store, Clock, Star, Loader2 } from 'lucide-react'; // Loader2 ditambahkan
 import ProductCard from '../components/products/ProductCard';
-import type { AppProduct, HomePageCategoryDisplay, Shop } from '../types'; // Pastikan path ini benar
-import { LOCAL_STORAGE_KEYS, initialGeneralProducts } from '../data/dummyDataInitializer'; // Pastikan path ini benar
+import type { AppProduct, HomePageCategoryDisplay, Shop, Category as CategoryType } from '../types'; // CategoryType diimpor
+import { apiClient } from '../utils/apiClient'; // apiClient diimpor
+// Hapus: import { LOCAL_STORAGE_KEYS, initialGeneralProducts } from '../data/dummyDataInitializer';
 
-// Definisikan categoryImageMap di sini. Ini adalah kunci untuk gambar kategori yang benar.
-// Pastikan nama kategori di sini (sebagai key) SAMA PERSIS (case-sensitive)
-// dengan nama kategori yang ada di data toko Anda.
+// Definisikan categoryImageMap di sini.
 const categoryImageMap: { [key: string]: string } = {
-  'Electronics': 'https://images.pexels.com/photos/4602019/pexels-photo-4602019.jpeg?auto=compress&cs=tinysrgb&w=600', // Ganti dengan URL gambar elektronik yang sesuai
-  'Photography': 'https://images.pexels.com/photos/243757/pexels-photo-243757.jpeg?auto=compress&cs=tinysrgb&w=600', // Ganti dengan URL gambar fotografi yang sesuai
+  'Electronics': 'https://images.pexels.com/photos/4602019/pexels-photo-4602019.jpeg?auto=compress&cs=tinysrgb&w=600',
+  'Photography': 'https://images.pexels.com/photos/243757/pexels-photo-243757.jpeg?auto=compress&cs=tinysrgb&w=600',
   'Outdoor Gear': 'https://images.pexels.com/photos/2666598/pexels-photo-2666598.jpeg?auto=compress&cs=tinysrgb&w=600',
   'Tools & Equipment': 'https://images.pexels.com/photos/1249611/pexels-photo-1249611.jpeg?auto=compress&cs=tinysrgb&w=600',
   'Sports Equipment': 'https://images.pexels.com/photos/100582/pexels-photo-100582.jpeg?auto=compress&cs=tinysrgb&w=600',
   'Clothing': 'https://images.pexels.com/photos/1342609/pexels-photo-1342609.jpeg?auto=compress&cs=tinysrgb&w=600',
   'Musical Instruments': 'https://images.pexels.com/photos/4087991/pexels-photo-4087991.jpeg?auto=compress&cs=tinysrgb&w=600',
-  'Party Supplies': 'https://images.pexels.com/photos/3171837/pexels-photo-3171837.jpeg?auto=compress&cs=tinysrgb&w=600', // Contoh
+  'Party Supplies': 'https://images.pexels.com/photos/3171837/pexels-photo-3171837.jpeg?auto=compress&cs=tinysrgb&w=600',
+  'Decorations': 'https://images.pexels.com/photos/271795/pexels-photo-271795.jpeg?auto=compress&cs=tinysrgb&w=600', // Contoh tambahan
   // Tambahkan kategori lain dan URL gambar yang sesuai
 };
 
 const HomePage: React.FC = () => {
   const [homePageCategories, setHomePageCategories] = useState<HomePageCategoryDisplay[]>([]);
   const [homePageFeaturedProducts, setHomePageFeaturedProducts] = useState<AppProduct[]>([]);
+  const [isLoadingCategories, setIsLoadingCategories] = useState(true);
+  const [isLoadingProducts, setIsLoadingProducts] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // 1. Memuat dan memproses data toko untuk KATEGORI
-    const shopsString = localStorage.getItem(LOCAL_STORAGE_KEYS.SHOPS);
-    const allShops: Shop[] = shopsString ? JSON.parse(shopsString) : [];
+    const fetchHomepageData = async () => {
+      console.log("[HomePage DEBUG] Attempting to fetch homepage data...");
+      // Fetch Categories (berdasarkan jumlah toko per kategori)
+      setIsLoadingCategories(true);
+      try {
+        console.log("[HomePage DEBUG] Fetching all shops for category counts...");
+        const allShopsFromApi: Shop[] = await apiClient.get('/shops/');
+        console.log("[HomePage DEBUG] Shops fetched for category counts:", allShopsFromApi.length);
 
-    const categoryCounts: { [key: string]: number } = {};
-    allShops.forEach(shop => {
-      shop.categories.forEach(catName => {
-        if (!categoryCounts[catName]) {
-          categoryCounts[catName] = 0;
-        }
-        categoryCounts[catName]++;
-      });
-    });
+        const validShops = Array.isArray(allShopsFromApi) ? allShopsFromApi : [];
+        const categoryCounts: { [key: string]: { id: string | number, name: string, count: number } } = {};
 
-    const processedCategories: HomePageCategoryDisplay[] = Object.entries(categoryCounts)
-      .map(([name, count]) => ({
-        id: name.replace(/\s+/g, '-').toLowerCase(),
-        name: name,
-        count: count, // Ini adalah jumlah toko yang memiliki kategori tersebut
-        image: categoryImageMap[name] || 'https://via.placeholder.com/300x200.png?text=No+Image', // Gunakan gambar dari map, fallback ke placeholder
-      }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 4); // Ambil 4 kategori teratas (atau sesuaikan)
-
-    setHomePageCategories(processedCategories);
-
-    // 2. Memuat dan memproses semua produk untuk PRODUK UNGGULAN
-    const allProductsString = localStorage.getItem(LOCAL_STORAGE_KEYS.ALL_PRODUCTS);
-    let allAvailableProducts: AppProduct[] = allProductsString ? JSON.parse(allProductsString) : [];
-    
-    if (allAvailableProducts.length === 0 && initialGeneralProducts) { // Pastikan initialGeneralProducts ada
-        allAvailableProducts = [...initialGeneralProducts];
-        const shopsForProductFallback: Shop[] = shopsString ? JSON.parse(shopsString) : [];
-        shopsForProductFallback.forEach(shop => {
-            const shopProductsKey = `${LOCAL_STORAGE_KEYS.SHOP_PRODUCTS_PREFIX}${shop.id}`;
-            const productsString = localStorage.getItem(shopProductsKey);
-            if (productsString) {
-                const shopProducts: AppProduct[] = JSON.parse(productsString);
-                shopProducts.forEach(sp => {
-                    if (!allAvailableProducts.find(p => p.id === sp.id)) {
-                        allAvailableProducts.push(sp);
-                    }
-                });
-            }
+        validShops.forEach(shop => {
+          if (Array.isArray(shop.categories)) {
+            shop.categories.forEach((cat: CategoryType) => { // Eksplisit tipe CategoryType
+              if (!categoryCounts[cat.name]) {
+                categoryCounts[cat.name] = { id: cat.id, name: cat.name, count: 0 };
+              }
+              categoryCounts[cat.name].count++;
+            });
+          }
         });
-    }
+        
+        const processedCategories: HomePageCategoryDisplay[] = Object.values(categoryCounts)
+          .map(catData => ({
+            id: String(catData.id), // Gunakan ID dari kategori jika ada
+            name: catData.name,
+            count: catData.count, // Jumlah toko yang memiliki kategori tersebut
+            image: categoryImageMap[catData.name] || 'https://via.placeholder.com/300x200.png?text=No+Image',
+          }))
+          .sort((a, b) => b.count - a.count) // Urutkan berdasarkan jumlah toko
+          .slice(0, 4); // Ambil 4 kategori teratas
 
-    const featured = allAvailableProducts
-      .filter(product => product.available && (product.rating || 0) >= 4.5)
-      .sort((a, b) => (b.rating || 0) - (a.rating || 0))
-      .slice(0, 4);
+        setHomePageCategories(processedCategories);
+        console.log("[HomePage DEBUG] Popular categories processed:", processedCategories);
+      } catch (err: any) {
+        console.error("[HomePage DEBUG] Error fetching shops for categories:", err);
+        setError(prev => prev ? `${prev}\nFailed to load categories.` : 'Failed to load categories.');
+      } finally {
+        setIsLoadingCategories(false);
+      }
 
-    if (featured.length === 0 && allAvailableProducts.length > 0) {
-        setHomePageFeaturedProducts(
-            allAvailableProducts.filter(p => p.available).slice(0, 4)
-        );
-    } else if (featured.length === 0 && allAvailableProducts.length === 0) {
-        setHomePageFeaturedProducts([]);
-    }
-    else {
+      // Fetch Featured Products
+      setIsLoadingProducts(true);
+      try {
+        console.log("[HomePage DEBUG] Fetching all products for featured section...");
+        const allProductsFromApi: any[] = await apiClient.get('/products/'); // API mengembalikan any[]
+        console.log("[HomePage DEBUG] Products fetched for featured section:", allProductsFromApi.length);
+
+        const validProducts = Array.isArray(allProductsFromApi) ? allProductsFromApi : [];
+        const processedProducts: AppProduct[] = validProducts.map(p => ({
+            // Pemetaan seperti yang dilakukan di ProductDetailPage dan ProductsPage
+            id: String(p.id),
+            name: p.name || 'Unnamed Product',
+            description: p.description || '',
+            price: parseFloat(p.price as any),
+            images: Array.isArray(p.images) ? p.images : [],
+            category: p.category_name || p.category || 'Uncategorized',
+            rating: parseFloat(p.rating as any) || 0,
+            available: p.available !== undefined ? p.available : true,
+            owner: p.owner_info ? { id: String(p.owner_info.id), name: p.owner_info.name } : { id: '', name: 'Unknown Shop' },
+            shopId: String(p.shop_id || (p.owner_info ? p.owner_info.id : '')),
+            total_individual_rentals: parseInt(p.total_individual_rentals as any, 10) || 0,
+            status: p.status || (p.available ? 'available' : 'rented'),
+            reviews: Array.isArray(p.reviews) ? p.reviews : [],
+        }));
+
+        let featured = processedProducts
+          .filter(product => product.available && (product.rating || 0) >= 4.0) // Sedikit turunkan kriteria rating jika perlu
+          .sort((a, b) => (b.rating || 0) - (a.rating || 0))
+          .slice(0, 4);
+
+        if (featured.length === 0 && processedProducts.length > 0) {
+          // Fallback jika tidak ada yang rating tinggi, ambil 4 pertama yang tersedia
+          featured = processedProducts.filter(p => p.available).slice(0, 4);
+        }
         setHomePageFeaturedProducts(featured);
-    }
+        console.log("[HomePage DEBUG] Featured products processed:", featured);
+      } catch (err: any) {
+        console.error("[HomePage DEBUG] Error fetching products for featured:", err);
+        setError(prev => prev ? `${prev}\nFailed to load featured products.` : 'Failed to load featured products.');
+      } finally {
+        setIsLoadingProducts(false);
+      }
+      console.log("[HomePage DEBUG] Homepage data fetching finished.");
+    };
 
-  }, []);
+    fetchHomepageData();
+  }, []); // Hanya dijalankan sekali saat komponen dimuat
+
+  // JSX untuk render (struktur umumnya tetap sama, kita akan tambahkan handling loading/error)
+
+  const renderCategories = () => {
+    if (isLoadingCategories) return <div className="text-center py-4"><Loader2 className="h-8 w-8 animate-spin text-primary-500 mx-auto" /> <p>Loading categories...</p></div>;
+    if (!isLoadingCategories && homePageCategories.length === 0) return <p className="text-center text-gray-500">No popular categories to display yet.</p>;
+    return (
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6">
+        {homePageCategories.map((category) => (
+          <Link
+            key={category.id}
+            to={`/products?category=${encodeURIComponent(category.name)}`}
+            className="group rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-shadow duration-300"
+          >
+            <div className="relative h-40 md:h-48 bg-gray-200 overflow-hidden">
+              <img
+                src={category.image}
+                alt={category.name}
+                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+              />
+            </div>
+            <div className="p-4 bg-white">
+              <h3 className="font-semibold text-sm md:text-base text-gray-800">{category.name}</h3>
+              {/* count sekarang adalah jumlah toko */}
+              <p className="text-xs md:text-sm text-gray-500">{category.count} {category.count === 1 ? 'shop' : 'shops'}</p>
+            </div>
+          </Link>
+        ))}
+      </div>
+    );
+  };
+
+  const renderFeaturedProducts = () => {
+    if (isLoadingProducts) return <div className="text-center py-8"><Loader2 className="h-8 w-8 animate-spin text-primary-500 mx-auto" /> <p>Loading featured products...</p></div>;
+    if (!isLoadingProducts && homePageFeaturedProducts.length === 0) return <p className="text-center text-gray-500">No featured products to display yet.</p>;
+    return (
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        {homePageFeaturedProducts.map((product) => (
+          <ProductCard
+            key={product.id}
+            product={product} // product sudah diproses dengan tipe yang benar
+          />
+        ))}
+      </div>
+    );
+  };
 
   return (
     <div className="fade-in">
       {/* Hero Section */}
       <section className="relative bg-gradient-to-r from-primary-800 to-primary-600 text-white py-20 md:py-24">
-        <div className="container-custom">
+        {/* ... (konten hero tetap sama) ... */}
+         <div className="container-custom">
           <div className="max-w-3xl">
             <h1 className="text-4xl md:text-5xl font-bold mb-4 leading-tight">
               Rent What You Need, When You Need It
@@ -124,37 +199,15 @@ const HomePage: React.FC = () => {
       <section className="py-16 bg-gray-50">
         <div className="container-custom">
           <h2 className="text-2xl md:text-3xl font-bold text-center mb-12">Popular Categories</h2>
-          {homePageCategories.length > 0 ? (
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6">
-              {homePageCategories.map((category) => (
-                <Link 
-                  key={category.id} 
-                  to={`/products?category=${encodeURIComponent(category.name)}`}
-                  className="group rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-shadow duration-300"
-                >
-                  <div className="relative h-40 md:h-48 bg-gray-200 overflow-hidden">
-                    <img 
-                      src={category.image} 
-                      alt={category.name} 
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                    />
-                  </div>
-                  <div className="p-4 bg-white">
-                    <h3 className="font-semibold text-sm md:text-base text-gray-800">{category.name}</h3>
-                    <p className="text-xs md:text-sm text-gray-500">{category.count} shops</p>
-                  </div>
-                </Link>
-              ))}
-            </div>
-          ) : (
-            <p className="text-center text-gray-500">No categories to display yet. Create some shops and add products!</p>
-          )}
+          {error && !isLoadingCategories && <p className="text-center text-red-500 mb-4">Could not load categories: {error.includes('categories') ? error : ''}</p>}
+          {renderCategories()}
         </div>
       </section>
 
       {/* How It Works */}
       <section className="py-16 bg-white">
-        <div className="container-custom">
+        {/* ... (konten how it works tetap sama) ... */}
+         <div className="container-custom">
           <h2 className="text-2xl md:text-3xl font-bold text-center mb-4">How Melar Works</h2>
           <p className="text-gray-600 text-center max-w-2xl mx-auto mb-12">
             Renting has never been easier. Follow these simple steps to get started with Melar.
@@ -200,33 +253,15 @@ const HomePage: React.FC = () => {
               View All
             </Link>
           </div>
-          
-          {homePageFeaturedProducts.length > 0 ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-              {homePageFeaturedProducts.map((product) => (
-                <ProductCard 
-                  key={product.id} 
-                  product={{
-                    id: product.id,
-                    name: product.name,
-                    price: product.price,
-                    images: product.images, 
-                    rating: product.rating || 0,
-                    available: product.available,
-                    category: product.category,
-                  }} 
-                />
-              ))}
-            </div>
-          ) : (
-             <p className="text-center text-gray-500">No featured products to display yet. Add some products to shops!</p>
-          )}
+          {error && !isLoadingProducts && <p className="text-center text-red-500 mb-4">Could not load featured products: {error.includes('products') ? error : ''}</p>}
+          {renderFeaturedProducts()}
         </div>
       </section>
 
       {/* Trust Badges */}
       <section className="py-16 bg-white">
-        <div className="container-custom">
+        {/* ... (konten trust badges tetap sama) ... */}
+         <div className="container-custom">
           <h2 className="text-2xl md:text-3xl font-bold text-center mb-12">Why Choose Melar</h2>
           <div className="grid md:grid-cols-3 gap-8">
             <div className="bg-gray-50 p-6 rounded-lg text-center">
@@ -262,7 +297,8 @@ const HomePage: React.FC = () => {
 
       {/* CTA Section */}
       <section className="bg-primary-700 text-white py-16">
-        <div className="container-custom text-center">
+        {/* ... (konten CTA tetap sama) ... */}
+         <div className="container-custom text-center">
           <h2 className="text-2xl md:text-3xl font-bold mb-4">Ready to Get Started?</h2>
           <p className="text-lg opacity-90 max-w-2xl mx-auto mb-8">
             Join thousands of users who are already enjoying the benefits of Melar's rental platform.
