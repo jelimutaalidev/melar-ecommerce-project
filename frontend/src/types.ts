@@ -121,7 +121,7 @@ export interface ShopOrder { // Ini lebih seperti "Pesanan yang diterima oleh To
   rentalPeriod: RentalPeriod; 
   shopId: string; // ID Toko yang menerima pesanan ini
   status: OrderStatus; // Menggunakan tipe OrderStatus yang sudah didefinisikan
-  total: number;
+  total_price: number; // <--- UBAH INI
   shippingAddress?: { // Alamat pengiriman/billing dari form checkout
     firstName: string;
     lastName: string;

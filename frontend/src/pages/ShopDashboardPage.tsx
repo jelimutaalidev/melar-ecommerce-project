@@ -6,9 +6,10 @@ import {
   ChevronDown, Search, Edit, Trash, ArrowUpRight,
   Store as IconStore, Loader2
 } from 'lucide-react';
-import { useAuth } from '../context/AuthContext'; //
-import type { AppProduct, ShopOrder, Shop, Category as CategoryType, OrderItem } from '../types'; //
-import { apiClient } from '../utils/apiClient'; //
+import { useAuth } from '../context/AuthContext';
+import type { AppProduct, ShopOrder, Shop, Category as CategoryType, OrderItem } from '../types'; // Pastikan ShopOrder di types.ts memiliki 'total_price' dan 'date' atau 'created_at'
+import { apiClient } from '../utils/apiClient';
+import { format } from 'date-fns'; // Import format dari date-fns
 
 const ShopDashboardPage: React.FC = () => {
   const { user, isAuthenticated, loading: authLoading } = useAuth();
@@ -81,7 +82,7 @@ const ShopDashboardPage: React.FC = () => {
             name: shopDetailsData.name,
             description: shopDetailsData.description,
             location: shopDetailsData.location,
-            phoneNumber: shopDetailsData.phoneNumber || '',
+            phoneNumber: shopDetailsData.phone_number || '', // Perhatikan perubahan nama field dari API
             address: shopDetailsData.address || '',
             zip_code: shopDetailsData.zip_code || '',
             business_type: shopDetailsData.business_type || '',
@@ -91,8 +92,8 @@ const ShopDashboardPage: React.FC = () => {
         } else {
           setShopDetails(null);
           console.warn(`[ShopDashboard_LOAD_DATA_CALLBACK] Shop details not found or invalid from API for shopId: ${shopIdToLoad}. Response:`, shopDetailsData);
-          setDataLoadError("Shop details could not be loaded from the server."); // Ini akan ditangkap oleh catch utama
-          throw new Error("Shop details could not be loaded from the server."); // Lemparkan error agar masuk ke catch utama
+          setDataLoadError("Shop details could not be loaded from the server.");
+          throw new Error("Shop details could not be loaded from the server.");
         }
       }
 
@@ -106,52 +107,75 @@ const ShopDashboardPage: React.FC = () => {
         available: typeof p.available === 'boolean' ? p.available : true,
         total_individual_rentals: parseInt(p.total_individual_rentals, 10) || 0,
         images: Array.isArray(p.images) ? p.images : [],
-        category: p.category || p.category_name || 'Uncategorized',
-        owner: p.owner_info || { id: String(shopIdToLoad), name: shopDetailsData?.name || 'Shop' }, // Pastikan owner_info ada atau fallback
-        shopId: String(shopIdToLoad) // Pastikan shopId ada di produk
+        category: p.category_name || p.category || 'Uncategorized', // Menggunakan category_name jika ada
+        owner: p.owner_info || { id: String(shopIdToLoad), name: shopDetailsData?.name || 'Shop' },
+        shopId: String(shopIdToLoad)
       }));
-      
+
       if (isMountedRef.current) setShopProducts(productsData);
       console.log(`[ShopDashboard_LOAD_DATA_CALLBACK] Loaded ${productsData?.length || 0} products (price converted).`, productsData);
-      
+
       console.log("[ShopDashboard_LOAD_DATA_CALLBACK] Fetching all categories for settings form.");
       const categoriesData: CategoryType[] = await apiClient.get('/categories/');
       if (isMountedRef.current) setAllApiCategories(categoriesData || []);
       console.log("[ShopDashboard_LOAD_DATA_CALLBACK] All categories loaded for settings:", categoriesData);
 
-      // Panggilan API untuk orders dipisahkan agar errornya tidak mereset data lain secara prematur
       try {
           console.log(`[ShopDashboard_LOAD_DATA_CALLBACK] Fetching shop orders for shopId: ${shopIdToLoad}`);
-          // Menggunakan custom action /shops/{shopId}/orders/
-          const rawOrdersData: any[] = await apiClient.get(`/shops/${shopIdToLoad}/orders/`);
-          const ordersData: ShopOrder[] = (rawOrdersData || []).map((o: any) => ({
-            ...o,
-            id: String(o.id),
-            total: parseFloat(o.total),
-            date: o.date, 
-            items: Array.isArray(o.items) ? o.items.map((item: any) => ({
-                ...item,
-                productId: String(item.product || item.productId), 
-                pricePerDay: parseFloat(item.price_per_day_at_rental || item.pricePerDay || 0),
-                quantity: parseInt(item.quantity, 10) || 1,
-            })) : [],
-          }));
-          if (isMountedRef.current) setShopOrders(ordersData);
-          console.log(`[ShopDashboard_LOAD_DATA_CALLBACK] Loaded ${ordersData?.length || 0} orders.`, ordersData);
+          const rawOrdersDataFromApi: any[] = await apiClient.get(`/shops/${shopIdToLoad}/orders/`);
+          console.log("[ShopDashboard_LOAD_DATA_CALLBACK] RAW Shop Orders Data from API:", JSON.stringify(rawOrdersDataFromApi, null, 2));
+
+          const processedOrdersData: ShopOrder[] = (rawOrdersDataFromApi || []).map((o: any) => {
+            // Ambil tanggal dari created_at jika 'date' tidak ada atau tidak valid
+            const orderDateString = o.created_at || o.date; // API Anda mengembalikan 'created_at' untuk order
+            let parsedTotal = 0;
+
+            // Coba parse total dari field yang mungkin (total_price atau total)
+            if (typeof o.total_price !== 'undefined' && !isNaN(parseFloat(o.total_price))) {
+                parsedTotal = parseFloat(o.total_price);
+            } else if (typeof o.total !== 'undefined' && !isNaN(parseFloat(o.total))) {
+                // Fallback jika API mengirim 'total' dan bukan 'total_price'
+                parsedTotal = parseFloat(o.total);
+                console.warn(`[ShopDashboard_LOAD_DATA_CALLBACK] Order ID ${o.id} using 'total' field instead of 'total_price'. API value: ${o.total}`);
+            } else {
+                console.warn(`[ShopDashboard_LOAD_DATA_CALLBACK] Order ID ${o.id} has invalid or missing total_price/total. API value: total_price=${o.total_price}, total=${o.total}`);
+            }
+
+            return {
+              ...o, // Spread sisa properti dari API
+              id: String(o.id),
+              // Pastikan nama field di frontend konsisten dengan tipe ShopOrder
+              total_price: parsedTotal, // Jika tipe Anda adalah total_price
+              // total: parsedTotal, // Atau jika tipe Anda adalah total
+              date: orderDateString, // Ini adalah string tanggal dari API
+              customerName: o.user?.username || o.first_name + ' ' + o.last_name || o.customerName || 'Unknown Customer', // Sesuaikan dengan struktur user di OrderSerializer
+              status: o.status || 'pending', // Default status jika tidak ada
+              items: Array.isArray(o.items) ? o.items.map((item: any) => ({
+                  ...item,
+                  productId: String(item.product || item.productId || item.product_id),
+                  name: item.product_name || item.name || (item.product_detail ? item.product_detail.name : 'Unknown Item'),
+                  pricePerDay: parseFloat(item.price_per_day_at_rental || item.pricePerDay || item.product_detail?.price || 0),
+                  quantity: parseInt(item.quantity, 10) || 1,
+                  image: item.product_image || item.image || item.product_detail?.main_image || '',
+              })) : [],
+              // Pastikan rentalPeriod ada jika tipe ShopOrder Anda membutuhkannya
+              rentalPeriod: o.rentalPeriod || (o.items && o.items.length > 0 ? { startDate: o.items[0].start_date, endDate: o.items[0].end_date } : { startDate: '', endDate: ''})
+            };
+          });
+          if (isMountedRef.current) setShopOrders(processedOrdersData);
+          console.log(`[ShopDashboard_LOAD_DATA_CALLBACK] Loaded ${processedOrdersData?.length || 0} orders. PROCESSED:`, JSON.stringify(processedOrdersData, null, 2));
       } catch (orderError: any) {
           console.error(`[ShopDashboard_LOAD_DATA_CALLBACK] Error fetching shop orders for shopId ${shopIdToLoad}:`, orderError);
           if (isMountedRef.current) {
               setShopOrders([]);
-              // Opsional: Set error spesifik untuk order jika ingin ditampilkan berbeda
-              // setDataLoadError(prevError => prevError ? `${prevError}\nFailed to load orders: ${orderError.message}` : `Failed to load orders: ${orderError.message}`);
           }
       }
 
-    } catch (error: any) { // Menangkap error dari fetch shopDetails, products, atau categories
+    } catch (error: any) {
       console.error(`[ShopDashboard_LOAD_DATA_CALLBACK] Critical error loading initial dashboard data for shopId ${shopIdToLoad}:`, error);
       if (isMountedRef.current) {
         setDataLoadError(`Error fetching crucial dashboard data: ${error.message || 'Unknown error'}`);
-        setShopDetails(null); 
+        setShopDetails(null);
         setShopProducts([]);
         setShopOrders([]);
         setAllApiCategories([]);
@@ -162,14 +186,14 @@ const ShopDashboardPage: React.FC = () => {
         console.log("[ShopDashboard_LOAD_DATA_CALLBACK] Data loading process finished. isLoadingData set to false.");
       }
     }
-  }, [user, isAuthenticated]); // Hapus shopId dari sini, karena sudah diambil dari user di dalam useCallback
+  }, [user, isAuthenticated]);
 
   useEffect(() => {
     isMountedRef.current = true;
     console.log(
-      "[ShopDashboard_EFFECT] Main effect triggered. User:", user, 
-      "Shop ID:", user?.shopId, 
-      "IsAuthenticated:", isAuthenticated, 
+      "[ShopDashboard_EFFECT] Main effect triggered. User:", user,
+      "Shop ID:", user?.shopId,
+      "IsAuthenticated:", isAuthenticated,
       "AuthLoading:", authLoading,
       "Location Key:", location.key,
       "Location State:", location.state
@@ -178,7 +202,7 @@ const ShopDashboardPage: React.FC = () => {
     if (!authLoading) {
       if (isAuthenticated && user?.shopId) {
         console.log(`[ShopDashboard_EFFECT] Conditions met for initial load. User authenticated with shopId: ${user.shopId}. Calling loadDataFromAPI.`);
-        loadDataFromAPI(user.shopId); 
+        loadDataFromAPI(user.shopId);
       } else {
         console.log("[ShopDashboard_EFFECT] Conditions NOT met for initial API call after auth. isAuthenticated:", isAuthenticated, "user:", !!user, "user.shopId:", user?.shopId);
         if (isMountedRef.current) setIsLoadingData(false);
@@ -193,20 +217,22 @@ const ShopDashboardPage: React.FC = () => {
     const currentRefreshFlags = {
         refreshProducts: location.state?.refreshProducts,
         refreshOrders: location.state?.refreshOrders,
-        refreshRentals: location.state?.refreshRentals,
+        refreshRentals: location.state?.refreshRentals, //Meskipun tidak digunakan langsung, bisa jadi trigger umum
     };
 
+    // Jika ada flag refresh dari navigasi (misalnya setelah menambah/edit produk, atau membuat order)
     if (Object.values(currentRefreshFlags).some(flag => flag)) {
         const { refreshProducts, refreshOrders, refreshRentals, tab, ...restState } = location.state || {};
         if (isMountedRef.current && (refreshProducts || refreshOrders || refreshRentals)) {
             console.log("[ShopDashboard_EFFECT] Refresh flag detected, preparing to re-load data from API.", currentRefreshFlags);
             if (!authLoading && isAuthenticated && user?.shopId) {
                 console.log("[ShopDashboard_EFFECT] Calling loadDataFromAPI due to refresh flag with shopId:", user.shopId);
-                loadDataFromAPI(user.shopId);
+                loadDataFromAPI(user.shopId); // Panggil loadDataFromAPI untuk refresh semua data dashboard
             } else {
                 console.log("[ShopDashboard_EFFECT] Refresh flag, but conditions for API call not met during refresh check.");
             }
         }
+        // Bersihkan state navigasi setelah refresh
         if (isMountedRef.current) navigate(location.pathname, { state: restState, replace: true });
     }
 
@@ -235,7 +261,7 @@ const ShopDashboardPage: React.FC = () => {
       }
       if (user?.shopId && isMountedRef.current) {
         console.log("[ShopDashboard] Re-fetching products after deletion.");
-        loadDataFromAPI(user.shopId); 
+        loadDataFromAPI(user.shopId);
       }
       setSelectedItems([]);
       setShowDeleteModal(false);
@@ -256,7 +282,7 @@ const ShopDashboardPage: React.FC = () => {
     if (!product || typeof product.name !== 'string') return false;
     const searchLower = searchQuery.toLowerCase();
     const nameMatch = product.name.toLowerCase().includes(searchLower);
-    const categoryMatch = product.category && typeof product.category === 'string' && product.category.toLowerCase().includes(searchLower);
+    const categoryMatch = product.category_name && typeof product.category_name === 'string' && product.category_name.toLowerCase().includes(searchLower);
     const matchesSearch = nameMatch || categoryMatch;
     const productStatusKey = product.status || (product.available ? 'available' : 'rented');
     const matchesStatus = statusFilter === 'all' || productStatusKey === statusFilter;
@@ -270,13 +296,16 @@ const ShopDashboardPage: React.FC = () => {
     const itemsMatch = (order?.items || []).some(item => item?.name?.toLowerCase().includes(searchLower) ?? false);
     return idMatch || customerNameMatch || itemsMatch;
   }).sort((a, b) => {
-    const dateA = new Date(a.date).getTime();
-    const dateB = new Date(b.date).getTime();
-    if (isNaN(dateA) && isNaN(dateB)) return 0;
-    if (isNaN(dateA)) return 1; 
-    if (isNaN(dateB)) return -1;
-    return dateB - dateA;
+    // Pastikan 'a.date' dan 'b.date' adalah string tanggal yang valid sebelum di-parse
+    const dateA = a.date && !isNaN(new Date(a.date).getTime()) ? new Date(a.date).getTime() : 0;
+    const dateB = b.date && !isNaN(new Date(b.date).getTime()) ? new Date(b.date).getTime() : 0;
+
+    if (dateA === 0 && dateB === 0) return 0; // Keduanya tidak valid
+    if (dateA === 0) return 1; // Anggap dateA lebih baru jika tidak valid, agar muncul di bawah
+    if (dateB === 0) return -1; // Anggap dateB lebih baru
+    return dateB - dateA; // Urutkan dari yang terbaru
   });
+
 
   const handleShopSettingsChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -315,32 +344,38 @@ const ShopDashboardPage: React.FC = () => {
 
     const payload: {
         name?: string; description?: string; location?: string;
-        phone_number?: string; address?: string; zip_code?: string;
+        phone_number?: string; address?: string; zip_code?: string; // Menggunakan phone_number
         business_type?: string; category_ids?: number[];
     } = {
       name: shopSettingsForm.name,
       description: shopSettingsForm.description,
       location: shopSettingsForm.location,
-      phone_number: shopSettingsForm.phoneNumber,
+      phone_number: shopSettingsForm.phoneNumber, // Menggunakan phone_number
       address: shopSettingsForm.address,
       zip_code: shopSettingsForm.zip_code,
       business_type: shopSettingsForm.business_type,
     };
-    // Hanya kirim category_ids jika ada perubahan atau memang ingin di-set
+
     const currentDetailCategoryIds = shopDetails.categories.map(c => Number(c.id)).sort();
-    const newPayloadCategoryIds = categoryIdsToSubmit.sort();
+    const newPayloadCategoryIds = [...categoryIdsToSubmit].sort(); // Salin array sebelum sort
     if (JSON.stringify(currentDetailCategoryIds) !== JSON.stringify(newPayloadCategoryIds)) {
-        payload.category_ids = categoryIdsToSubmit;
+        payload.category_ids = newPayloadCategoryIds; // Kirim category_ids yang sudah disortir
     }
-    
+
+
     Object.keys(payload).forEach(key => {
         const K = key as keyof typeof payload;
-        if (payload[K] === undefined || payload[K] === '' || (shopDetails && payload[K] === shopDetails[K as keyof Shop])) {
-            if (K !== 'category_ids') { // Jangan hapus category_ids jika sudah di-set di atas
+        // Cek jika undefined, null, atau sama dengan nilai di shopDetails
+        if (payload[K] === undefined || payload[K] === null ||
+            (shopDetails && payload[K] === shopDetails[K as keyof Shop] && K !== 'category_ids')) {
+             // Jangan hapus category_ids jika sudah di-set di atas dan berbeda
+             if (!(K === 'category_ids' && payload.category_ids && JSON.stringify(currentDetailCategoryIds) !== JSON.stringify(newPayloadCategoryIds))) {
                  delete payload[K];
-            }
+             }
         }
     });
+
+
     if (Object.keys(payload).length === 0) {
         alert("No changes detected to save.");
         if(isMountedRef.current) setIsSubmitting(false);
@@ -353,11 +388,11 @@ const ShopDashboardPage: React.FC = () => {
       console.log("[ShopDashboard] Shop settings updated via API, response:", updatedShopFromApi);
       if (isMountedRef.current) {
         setShopDetails(updatedShopFromApi);
-        setShopSettingsForm({
+        setShopSettingsForm({ // Update form dengan data dari API
             name: updatedShopFromApi.name,
             description: updatedShopFromApi.description,
             location: updatedShopFromApi.location,
-            phoneNumber: updatedShopFromApi.phoneNumber || '',
+            phoneNumber: updatedShopFromApi.phone_number || '', // Menggunakan phone_number
             address: updatedShopFromApi.address || '',
             zip_code: updatedShopFromApi.zip_code || '',
             business_type: updatedShopFromApi.business_type || '',
@@ -401,22 +436,22 @@ const ShopDashboardPage: React.FC = () => {
       </div>
     );
   }
-  
+
   if (isLoadingData) {
     return <div className="text-center py-20"><Loader2 className="h-8 w-8 animate-spin text-primary-600 mx-auto" /> Loading dashboard data...</div>;
   }
-  
+
   if (user && user.hasShop && user.shopId && !shopDetails && dataLoadError && !isLoadingData) {
     return (
         <div className="text-center py-20">
             <p className="text-red-600 font-semibold">Failed to load shop information.</p>
             <p className="text-gray-600 mt-2">{dataLoadError}</p>
             <p className="text-gray-500 mt-1">Please try again or contact support.</p>
-            <button 
-              onClick={() => { 
-                console.log("[ShopDashboard_RENDER_ERROR_BUTTON] Retry Load button clicked. Attempting to reload data..."); 
-                if(user?.shopId) loadDataFromAPI(user.shopId); 
-              }} 
+            <button
+              onClick={() => {
+                console.log("[ShopDashboard_RENDER_ERROR_BUTTON] Retry Load button clicked. Attempting to reload data...");
+                if(user?.shopId) loadDataFromAPI(user.shopId);
+              }}
               className="btn-primary mt-4 mr-2"
             >
               Retry Load
@@ -425,7 +460,7 @@ const ShopDashboardPage: React.FC = () => {
         </div>
     );
   }
-  
+
   if (user && user.hasShop && user.shopId && !shopDetails && !isLoadingData && !dataLoadError) {
     console.error("[ShopDashboard_RENDER_ERROR_STUCK] User has shopId, loading finished, no specific dataLoadError, BUT shopDetails is STILL NULL. This is the stuck loading state. User:", user);
     return (
@@ -433,11 +468,11 @@ const ShopDashboardPage: React.FC = () => {
             <p className="text-red-600 font-semibold">Failed to load shop information.</p>
             <p className="text-gray-600 mt-2">The application could not retrieve your shop details, even though you seem to have a shop.</p>
             <p className="text-gray-500 mt-1">This might be a temporary issue or an issue with your shop data. Please try again. If the problem persists, check the console for errors or contact support.</p>
-            <button 
-              onClick={() => { 
-                console.log("[ShopDashboard_RENDER_STUCK_BUTTON] Retry Load button clicked. Attempting to reload data..."); 
-                if(user?.shopId) loadDataFromAPI(user.shopId); 
-              }} 
+            <button
+              onClick={() => {
+                console.log("[ShopDashboard_RENDER_STUCK_BUTTON] Retry Load button clicked. Attempting to reload data...");
+                if(user?.shopId) loadDataFromAPI(user.shopId);
+              }}
               className="btn-primary mt-4 mr-2"
             >
               Retry Load
@@ -454,8 +489,13 @@ const ShopDashboardPage: React.FC = () => {
     navigate(`/shop-dashboard/edit-product/${productId}`, { state: { shopId: user?.shopId, shopName: shopDetails?.name } });
   };
 
-  const totalRevenue = filteredOrders.reduce((sum, order) => order.status === 'completed' && typeof order.total === 'number' ? sum + order.total : sum, 0);
+  // Menggunakan total_price jika tipe ShopOrder Anda sudah diubah, atau total jika belum
+  const totalRevenue = filteredOrders.reduce((sum, order) => {
+    const orderTotal = order.total_price ?? order.total_price; // Prioritaskan total_price
+    return order.status === 'completed' && typeof orderTotal === 'number' && !isNaN(orderTotal) ? sum + orderTotal : sum;
+  }, 0);
   const activeRentalsCount = (shopProducts || []).filter(p => p.status === 'rented' || (p.hasOwnProperty('available') && !p.available)).length;
+
 
   return (
     <div className="bg-gray-50 min-h-screen pb-16 fade-in">
@@ -468,8 +508,8 @@ const ShopDashboardPage: React.FC = () => {
               </h1>
               <p className="text-primary-100">Manage your rental shop and products</p>
             </div>
-            <button 
-              onClick={handleAddNewProduct} 
+            <button
+              onClick={handleAddNewProduct}
               className="mt-4 md:mt-0 inline-flex items-center bg-white text-primary-700 hover:bg-gray-100 font-semibold px-4 py-2 rounded-md transition-colors disabled:opacity-50"
               disabled={isSubmitting || isLoadingData || !shopDetails}
             >
@@ -522,8 +562,8 @@ const ShopDashboardPage: React.FC = () => {
              <div className="bg-white rounded-lg shadow-sm">
               <div className="p-6 border-b flex justify-between items-center">
                 <h3 className="font-semibold">Recent Orders</h3>
-                <button 
-                  onClick={() => setActiveTab('orders')} 
+                <button
+                  onClick={() => setActiveTab('orders')}
                   className="text-primary-600 text-sm font-medium hover:text-primary-700"
                   disabled={isSubmitting || isLoadingData}
                 >View All</button>
@@ -532,7 +572,35 @@ const ShopDashboardPage: React.FC = () => {
                  <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50"><tr><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Order ID</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total</th></tr></thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {filteredOrders.slice(0, 3).map((order) => ( <tr key={order.id} className="hover:bg-gray-50"><td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{order.id}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{order.customerName}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{new Date(order.date).toLocaleDateString()}</td><td className="px-6 py-4 whitespace-nowrap"><span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${order.status === 'active' || order.status === 'confirmed' ? 'bg-green-100 text-green-800' : order.status === 'completed' ? 'bg-blue-100 text-blue-800' : order.status === 'cancelled' ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'}`}>{order.status.charAt(0).toUpperCase() + order.status.slice(1)}</span></td><td className="px-6 py-4 whitespace-nowrap text-sm font-medium">${typeof order.total === 'number' ? order.total.toFixed(2) : 'N/A'}</td></tr>))}
+                    {filteredOrders.slice(0, 3).map((order) => {
+                        const orderTotalValue = order.total_price ?? order.total_price; // Prioritaskan total_price
+                        return (
+                            <tr key={order.id} className="hover:bg-gray-50">
+                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{order.id}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{order.customerName}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                    {order.date && !isNaN(new Date(order.date).getTime())
+                                        ? format(new Date(order.date), 'PP') // Menggunakan format 'PP' dari date-fns
+                                        : 'Invalid Date'}
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                                        order.status === 'active' || order.status === 'confirmed' ? 'bg-green-100 text-green-800' :
+                                        order.status === 'completed' ? 'bg-blue-100 text-blue-800' :
+                                        order.status === 'cancelled' ? 'bg-red-100 text-red-800' :
+                                        'bg-yellow-100 text-yellow-800'
+                                    }`}>
+                                        {order.status ? order.status.charAt(0).toUpperCase() + order.status.slice(1) : 'Unknown'}
+                                    </span>
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                    {typeof orderTotalValue === 'number' && !isNaN(orderTotalValue)
+                                        ? `$${orderTotalValue.toFixed(2)}`
+                                        : '$N/A'}
+                                </td>
+                            </tr>
+                        );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -548,8 +616,8 @@ const ShopDashboardPage: React.FC = () => {
                 <div className="flex flex-col sm:flex-row gap-3">
                   <div className="relative"><input type="text" placeholder="Search products..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="input pl-10 w-full sm:w-auto"/><Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" /></div>
                   <div className="relative w-full sm:w-40"><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="input appearance-none w-full pr-8"><option value="all">All Status</option><option value="available">Available</option><option value="rented">Rented Out</option></select><ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" /></div>
-                  <button 
-                    onClick={handleAddNewProduct} 
+                  <button
+                    onClick={handleAddNewProduct}
                     className="btn-primary whitespace-nowrap"
                     disabled={isSubmitting || isLoadingData || !shopDetails}
                   ><Plus size={16} className="mr-1" /> Add Product</button>
@@ -561,7 +629,7 @@ const ShopDashboardPage: React.FC = () => {
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50"><tr><th className="pl-6 pr-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"><input type="checkbox" checked={filteredProducts.length > 0 && selectedItems.length === filteredProducts.length && filteredProducts.length > 0} onChange={handleSelectAll} disabled={filteredProducts.length === 0 || isSubmitting || isLoadingData} className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"/></th><th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Product</th><th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Category</th><th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th><th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th><th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Rentals</th><th className="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th></tr></thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {filteredProducts.map((product) => (<tr key={product.id} className="hover:bg-gray-50"><td className="pl-6 pr-3 py-4 whitespace-nowrap"><input type="checkbox" checked={selectedItems.includes(product.id)} onChange={() => handleItemSelect(product.id)} className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"/></td><td className="px-3 py-4 whitespace-nowrap"><div className="flex items-center"><div className="h-10 w-10 flex-shrink-0 rounded-md overflow-hidden bg-gray-100"><img src={product.images?.[0] || 'https://via.placeholder.com/40x40.png?text=N/A'} alt={product.name} className="h-10 w-10 object-cover" /></div><div className="ml-4"><div className="text-sm font-medium text-gray-900">{product.name}</div></div></div></td><td className="px-3 py-4 whitespace-nowrap text-sm text-gray-500">{product.category}</td><td className="px-3 py-4 whitespace-nowrap text-sm font-medium">${typeof product.price === 'number' ? product.price.toFixed(2) : 'N/A'}</td><td className="px-3 py-4 whitespace-nowrap"><span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${(product.status || (product.available ? 'available' : 'rented')) === 'available' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}>{(product.status || (product.available ? 'available' : 'rented')) === 'available' ? 'Available' : 'Rented Out'}</span></td><td className="px-3 py-4 whitespace-nowrap text-sm text-gray-500">{product.total_individual_rentals || 0}</td><td className="px-3 py-4 whitespace-nowrap text-right text-sm font-medium"><div className="flex justify-end space-x-2"><button onClick={() => handleEditProduct(product.id)} className="text-primary-600 hover:text-primary-700 p-1 rounded hover:bg-primary-50" title="Edit Product" disabled={isSubmitting || isLoadingData}><Edit size={16} /></button><button onClick={() => {setSelectedItems([product.id]); setShowDeleteModal(true);}} className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50" title="Delete Product" disabled={isSubmitting || isLoadingData}><Trash size={16} /></button></div></td></tr>))}
+                  {filteredProducts.map((product) => (<tr key={product.id} className="hover:bg-gray-50"><td className="pl-6 pr-3 py-4 whitespace-nowrap"><input type="checkbox" checked={selectedItems.includes(product.id)} onChange={() => handleItemSelect(product.id)} className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"/></td><td className="px-3 py-4 whitespace-nowrap"><div className="flex items-center"><div className="h-10 w-10 flex-shrink-0 rounded-md overflow-hidden bg-gray-100"><img src={product.images?.[0] || 'https://via.placeholder.com/40x40.png?text=N/A'} alt={product.name} className="h-10 w-10 object-cover" /></div><div className="ml-4"><div className="text-sm font-medium text-gray-900">{product.name}</div></div></div></td><td className="px-3 py-4 whitespace-nowrap text-sm text-gray-500">{product.category_name || product.category}</td><td className="px-3 py-4 whitespace-nowrap text-sm font-medium">${typeof product.price === 'number' ? product.price.toFixed(2) : 'N/A'}</td><td className="px-3 py-4 whitespace-nowrap"><span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${(product.status || (product.available ? 'available' : 'rented')) === 'available' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}>{(product.status || (product.available ? 'available' : 'rented')) === 'available' ? 'Available' : 'Rented Out'}</span></td><td className="px-3 py-4 whitespace-nowrap text-sm text-gray-500">{product.total_individual_rentals || 0}</td><td className="px-3 py-4 whitespace-nowrap text-right text-sm font-medium"><div className="flex justify-end space-x-2"><button onClick={() => handleEditProduct(product.id)} className="text-primary-600 hover:text-primary-700 p-1 rounded hover:bg-primary-50" title="Edit Product" disabled={isSubmitting || isLoadingData}><Edit size={16} /></button><button onClick={() => {setSelectedItems([product.id]); setShowDeleteModal(true);}} className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50" title="Delete Product" disabled={isSubmitting || isLoadingData}><Trash size={16} /></button></div></td></tr>))}
                 </tbody>
               </table>
             </div>
@@ -586,17 +654,42 @@ const ShopDashboardPage: React.FC = () => {
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50"><tr><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Order ID</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Items</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total</th><th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th></tr></thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {filteredOrders.map((order) => (<tr key={order.id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{order.id}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{order.customerName}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{new Date(order.date).toLocaleDateString()}</td>
-                        <td className="px-6 py-4 text-sm text-gray-500 max-w-xs truncate" title={order.items.map(item => item.name).join(', ')}>{order.items.map(item => item.name).join(', ')}</td>
-                        <td className="px-6 py-4 whitespace-nowrap"><span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${order.status === 'active' || order.status === 'confirmed' ? 'bg-green-100 text-green-800' : order.status === 'completed' ? 'bg-blue-100 text-blue-800' :  order.status === 'cancelled' ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'}`}>{order.status.charAt(0).toUpperCase() + order.status.slice(1)}</span></td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">${typeof order.total === 'number' ? order.total.toFixed(2) : 'N/A'}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                           <Link to={`/shop-dashboard/orders/${order.id}`} className="text-primary-600 hover:text-primary-700">View Details</Link>
-                        </td>
-                    </tr>))}
+                    {filteredOrders.map((order) => {
+                        // Gunakan total_price jika ada, fallback ke total
+                        const orderTotalValue = order.total_price ?? order.total_price;
+                        return (
+                            <tr key={order.id} className="hover:bg-gray-50">
+                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{order.id}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{order.customerName}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                    {/* Perbaikan formatting tanggal */}
+                                    {order.date && !isNaN(new Date(order.date).getTime())
+                                        ? format(new Date(order.date), 'PP') // Format 'PP' (misal: May 28, 2025)
+                                        : 'Invalid Date'}
+                                </td>
+                                <td className="px-6 py-4 text-sm text-gray-500 max-w-xs truncate" title={order.items.map(item => item.name).join(', ')}>{order.items.map(item => item.name).join(', ')}</td>
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                                        order.status === 'active' || order.status === 'confirmed' ? 'bg-green-100 text-green-800' :
+                                        order.status === 'completed' ? 'bg-blue-100 text-blue-800' :
+                                        order.status === 'cancelled' ? 'bg-red-100 text-red-800' :
+                                        'bg-yellow-100 text-yellow-800'
+                                    }`}>
+                                        {order.status ? order.status.charAt(0).toUpperCase() + order.status.slice(1) : 'Unknown'}
+                                    </span>
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                    {/* Perbaikan formatting total */}
+                                    {typeof orderTotalValue === 'number' && !isNaN(orderTotalValue)
+                                        ? `$${orderTotalValue.toFixed(2)}`
+                                        : '$N/A'}
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                   <Link to={`/shop-dashboard/orders/${order.id}`} className="text-primary-600 hover:text-primary-700">View Details</Link>
+                                </td>
+                            </tr>
+                        );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -643,9 +736,9 @@ const ShopDashboardPage: React.FC = () => {
                 ) : (<div className="text-center py-10"><Loader2 className="h-6 w-6 animate-spin text-primary-500 mx-auto"/> Loading shop settings...</div>)}
               </div>
               <div className="px-6 py-4 bg-gray-50 text-right border-t">
-                <button 
-                    type="submit" 
-                    className="btn-primary" 
+                <button
+                    type="submit"
+                    className="btn-primary"
                     disabled={isSubmitting || isLoadingData || !shopDetails}
                 >
                     {isSubmitting ? <><Loader2 className="animate-spin h-4 w-4 mr-2 inline-block"/>Saving...</> : 'Save Changes'}
