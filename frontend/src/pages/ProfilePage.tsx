@@ -1,77 +1,182 @@
 // frontend/src/pages/ProfilePage.tsx
-import React, { useState, useEffect } from 'react';
-import { useAuth } from '../context/AuthContext';
-import { User as UserIcon, Mail, Phone, MapPin, Lock, Package, Store, Edit, Save, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import type { User, UserRental, Shop, AppProduct } from '../types';
+import { useAuth } from '../context/AuthContext';
+// OrderStatus diimpor, AppProduct dihapus. Shop dipertahankan karena User bisa punya Shop.
+import type { User as AuthUserType, UserRental, Shop, OrderItem, OrderStatus } from '../types';
 import { LOCAL_STORAGE_KEYS } from '../data/dummyDataInitializer';
 import { format } from 'date-fns';
+import { apiClient } from '../utils/apiClient';
+
+// Icons: UserIcon, Mail, Phone, MapPin, Lock, Store, Edit (bukan Edit3), Save, AlertTriangle, CheckCircle, XCircle, LogOut, ShoppingBag, Building, Loader2
+// Package dihapus, Trash2 dihapus (AlertTriangle digunakan untuk delete account)
+import {
+  User as UserIcon, Mail, Phone, MapPin, Lock, Store, Edit, Save, AlertTriangle, CheckCircle, XCircle,
+  LogOut, ShoppingBag, Building, Loader2
+} from 'lucide-react';
+
+const formatDate = (dateString?: string) => {
+  if (!dateString) return 'N/A';
+  const dateObj = new Date(dateString.includes('T') ? dateString : dateString + 'T00:00:00');
+  if (isNaN(dateObj.getTime())) {
+    return 'Invalid Date';
+  }
+  return format(dateObj, 'PP');
+};
+
+const placeholderImage = 'https://via.placeholder.com/96x96.png?text=No+Image';
+
+// Menggunakan nama ProfileFormData agar tidak konflik dengan tipe User dari ../types
+interface ProfileFormData {
+  name: string;
+  email: string;
+  phone: string;
+  address: string;
+}
 
 const ProfilePage: React.FC = () => {
-  const { user, isAuthenticated, logout, updateUser } = useAuth(); // Menggunakan updateUser dari context
+  const { user, isAuthenticated, logout, updateUser, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const [activeTab, setActiveTab] = useState(() => {
-    const locationState = location.state as { tab?: string };
-    return locationState?.tab || 'profile';
-  });
-  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const isMountedRef = useRef(true);
+
+  const [activeTab, setActiveTab] = useState<'profile' | 'rentals' | 'security'>('profile');
   
-  const [profileData, setProfileData] = useState<Partial<User>>({
+  const [profileData, setProfileData] = useState<ProfileFormData>({
     name: '',
     email: '',
     phone: '',
     address: '',
   });
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
+
 
   const [passwordData, setPasswordData] = useState({
     currentPassword: '',
     newPassword: '',
     confirmNewPassword: '',
   });
-  const [rentalHistory, setRentalHistory] = useState<UserRental[]>([]);
-  const [isLoadingRentals, setIsLoadingRentals] = useState(true);
+
+  // Mengganti nama state dari rentalHistory ke userRentalsFromApi untuk kejelasan
+  const [userRentalsFromApi, setUserRentalsFromApi] = useState<UserRental[]>([]);
+  const [isLoadingRentals, setIsLoadingRentals] = useState(false); // Inisialisasi false
+  const [rentalFetchError, setRentalFetchError] = useState<string | null>(null);
+
 
   useEffect(() => {
+    isMountedRef.current = true;
     if (user) {
       setProfileData({
-        name: user.name || '',
+        name: user.name || `${user.first_name || ''} ${user.last_name || ''}`.trim(),
         email: user.email || '',
         phone: user.phone || '',
         address: user.address || '',
       });
     }
-  }, [user]);
+    const locationState = location.state as { tab?: string };
+    if (locationState?.tab) {
+        setActiveTab(locationState.tab as 'profile' | 'rentals' | 'security');
+    }
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, [user, location.state]);
 
-  useEffect(() => {
-    let isMounted = true;
-    if (isAuthenticated && user) {
-      setIsLoadingRentals(true);
-      const userRentalsKey = `${LOCAL_STORAGE_KEYS.USER_RENTALS_PREFIX}${user.id}`;
-      const storedRentalsString = localStorage.getItem(userRentalsKey);
-      console.log(`[ProfilePage] Loading rentals from key: ${userRentalsKey}`, storedRentalsString); // Debugging
-      try {
-        const storedRentals: UserRental[] = storedRentalsString ? JSON.parse(storedRentalsString) : [];
-        if (isMounted) setRentalHistory(storedRentals);
-      } catch (error) {
-        console.error("Failed to parse rental history:", error);
-        if (isMounted) setRentalHistory([]);
+  const fetchUserRentals = useCallback(async () => {
+    if (!user?.id || !isAuthenticated) return;
+    if (!isMountedRef.current) return;
+
+    setIsLoadingRentals(true);
+    setRentalFetchError(null);
+    console.log("[ProfilePage] Fetching user rentals from API...");
+
+    try {
+      const fetchedOrdersFromApi: any[] = await apiClient.get('/orders/');
+      console.log("[ProfilePage] Raw orders from API for rental history:", JSON.stringify(fetchedOrdersFromApi, null, 2));
+
+      if (!isMountedRef.current) return;
+
+      const mappedRentals: UserRental[] = fetchedOrdersFromApi.map((order: any): UserRental => {
+        const firstItemApi = order.items && order.items.length > 0 ? order.items[0] : null;
+        const firstProductFromItem = firstItemApi?.product; // product adalah objek di dalam item
+
+        const processedOrderItems: OrderItem[] = (order.items || []).map((itemApi: any): OrderItem => ({
+          productId: String(itemApi.product?.id || itemApi.product_id || ''),
+          name: itemApi.product_name || itemApi.product?.name || 'Unknown Product',
+          quantity: parseInt(String(itemApi.quantity), 10) || 1,
+          pricePerDay: parseFloat(String(itemApi.price_per_day_at_rental || itemApi.product?.price || 0)),
+          image: itemApi.product_image || placeholderImage, // Gunakan product_image dari item serializer
+          startDate: itemApi.start_date,
+          endDate: itemApi.end_date,
+          item_total: parseFloat(String(itemApi.item_total || 0)),
+        }));
+        
+        let displayProductName = 'N/A';
+        if (processedOrderItems.length > 1) {
+            displayProductName = `${processedOrderItems[0].name} & ${processedOrderItems.length - 1} more`;
+        } else if (processedOrderItems.length === 1) {
+            displayProductName = processedOrderItems[0].name;
+        }
+        
+        const shopNameFromItem = firstProductFromItem?.shop_name || firstProductFromItem?.owner?.name || 'Unknown Shop';
+        const shopIdFromItem = String(firstProductFromItem?.shop_id || firstProductFromItem?.owner?.id || '');
+        const imageFromFirstItem = firstItemApi?.product_image || placeholderImage;
+
+
+        return {
+          id: String(order.id),
+          orderId: String(order.id),
+          product: displayProductName,
+          shopName: shopNameFromItem,
+          shopId: shopIdFromItem,
+          image: imageFromFirstItem,
+          status: order.status || 'unknown',
+          startDate: firstItemApi?.start_date || order.start_date || '',
+          endDate: firstItemApi?.end_date || order.end_date || '',
+          total: parseFloat(String(order.total_price)) || 0,
+          items: processedOrderItems,
+          customerId: String(user.id),
+          displayDate: order.created_at || order.date,
+        };
+      }).sort((a, b) => {
+        // Perbaikan sorting, pastikan displayDate ada sebelum new Date()
+        const timeA = a.displayDate ? new Date(a.displayDate).getTime() : 0;
+        const timeB = b.displayDate ? new Date(b.displayDate).getTime() : 0;
+        
+        if (!timeA && !timeB) return 0;
+        if (!timeA) return 1; // undefined/null dates go last
+        if (!timeB) return -1;
+        return timeB - timeA; // Sort descending (newest first)
+      });
+
+      if (isMountedRef.current) {
+        setUserRentalsFromApi(mappedRentals); // Menggunakan state yang baru
+        console.log("[ProfilePage] Mapped user rentals from API:", JSON.stringify(mappedRentals, null, 2));
       }
-      if (isMounted) setIsLoadingRentals(false);
-
-      if (location.state?.refreshRentals) {
-        const { refreshRentals, ...restState } = location.state;
-        if (isMounted) navigate(location.pathname, { state: restState, replace: true });
+    } catch (error: any) {
+      console.error("Error fetching user rentals:", error);
+      if (isMountedRef.current) {
+        setRentalFetchError(error.message || "Failed to fetch rental history.");
       }
-
-    } else {
-      if (isMounted) {
-        setRentalHistory([]);
+    } finally {
+      if (isMountedRef.current) {
         setIsLoadingRentals(false);
       }
     }
-    return () => { isMounted = false; };
-  }, [isAuthenticated, user, location.state?.refreshRentals, navigate]);
+  }, [user, isAuthenticated]); // Dependencies yang benar
+
+  useEffect(() => {
+    const locationState = location.state as { refreshRentals?: boolean };
+    if (activeTab === 'rentals' || locationState?.refreshRentals) {
+        if (isAuthenticated && user) {
+            fetchUserRentals();
+            if (locationState?.refreshRentals) {
+                navigate(location.pathname, { state: { ...locationState, refreshRentals: false }, replace: true });
+            }
+        }
+    }
+  }, [activeTab, isAuthenticated, user, fetchUserRentals, location.state, navigate, location.pathname]);
 
 
   const handleProfileInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -82,27 +187,48 @@ const ProfilePage: React.FC = () => {
     setPasswordData({ ...passwordData, [e.target.name]: e.target.value });
   };
 
-  const handleUpdateProfile = (e: React.FormEvent) => {
+  const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
+    setIsUpdatingProfile(true);
+    try {
+      const updatePayload: Partial<AuthUserType> = {};
+      const currentNameParts = (user.name || '').split(' ');
+      const currentFirstName = currentNameParts[0] || '';
+      const currentLastName = currentNameParts.slice(1).join(' ') || '';
 
-    // Membuat objek dengan hanya field yang diisi di form untuk update
-    const changesToUpdate: Partial<User> = {};
-    if (profileData.name !== user.name) changesToUpdate.name = profileData.name;
-    if (profileData.email !== user.email) changesToUpdate.email = profileData.email; // Perlu validasi email jika diubah
-    if (profileData.phone !== (user.phone || '')) changesToUpdate.phone = profileData.phone;
-    if (profileData.address !== (user.address || '')) changesToUpdate.address = profileData.address;
+      const formNameParts = profileData.name.trim().split(' ');
+      const formFirstName = formNameParts[0] || '';
+      const formLastName = formNameParts.slice(1).join(' ') || '';
 
-    if (Object.keys(changesToUpdate).length > 0) {
-        updateUser(changesToUpdate); // Memanggil updateUser dari AuthContext
+      if (profileData.email !== user.email) updatePayload.email = profileData.email;
+      if (formFirstName !== (user.first_name || currentFirstName)) updatePayload.first_name = formFirstName;
+      if (formLastName !== (user.last_name || currentLastName)) updatePayload.last_name = formLastName;
+
+      // Untuk phone dan address, pastikan field ini ada di tipe AuthUserType dan ditangani oleh updateUser di AuthContext
+      if (profileData.phone !== (user.phone || '')) updatePayload.phone = profileData.phone;
+      if (profileData.address !== (user.address || '')) updatePayload.address = profileData.address;
+      
+      if (Object.keys(updatePayload).length > 0) {
+        await updateUser(updatePayload); // updateUser dari AuthContext
         alert('Profile updated successfully!');
-    } else {
+      } else {
         alert('No changes detected.');
+      }
+      setIsEditingProfile(false);
+    } catch (error: any) {
+      console.error("Error updating profile:", error);
+      const errorMsg = error.response?.data?.detail || 
+                       (error.response?.data && typeof error.response.data === 'object' 
+                          ? Object.values(error.response.data).flat().join(' ') 
+                          : error.message || 'Failed to update profile. Please try again.');
+      alert(errorMsg);
+    } finally {
+      setIsUpdatingProfile(false);
     }
-    setIsEditingProfile(false);
   };
 
-  const handleChangePassword = (e: React.FormEvent) => {
+  const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (passwordData.newPassword !== passwordData.confirmNewPassword) {
       alert("New passwords don't match!");
@@ -112,65 +238,84 @@ const ProfilePage: React.FC = () => {
       alert("New password must be at least 6 characters.");
       return;
     }
-    alert('Password changed successfully! (Simulated - Requires backend)');
-    setPasswordData({ currentPassword: '', newPassword: '', confirmNewPassword: '' });
+    setIsUpdatingProfile(true);
+    try {
+        await apiClient.post('/auth/password/change/', {
+            new_password1: passwordData.newPassword,
+            new_password2: passwordData.confirmNewPassword,
+            old_password: passwordData.currentPassword,
+        });
+        alert('Password changed successfully!');
+        setPasswordData({ currentPassword: '', newPassword: '', confirmNewPassword: '' });
+    } catch (error: any) {
+        console.error("Error changing password:", error);
+        const errorMsg = error.response?.data?.detail || 
+                         (error.response?.data && typeof error.response.data === 'object' 
+                            ? Object.values(error.response.data).flat().join(' ') 
+                            : 'Failed to change password. Please try again.');
+        alert(errorMsg);
+    } finally {
+        setIsUpdatingProfile(false);
+    }
   };
   
+  const _handleLogout = async () => { // Diberi nama _handleLogout untuk menghindari konflik dengan error TS2304
+    await logout();
+    navigate('/');
+  };
+
   const handleDeleteAccount = () => {
     if (!user) return;
     if (window.confirm('Are you sure you want to delete your account? This action cannot be undone and all your data including shops and products will be removed.')) {
-      const allUsersString = localStorage.getItem(LOCAL_STORAGE_KEYS.USERS);
-      let allUsers: User[] = allUsersString ? JSON.parse(allUsersString) : [];
-      allUsers = allUsers.filter(u => u.id !== user.id);
-      localStorage.setItem(LOCAL_STORAGE_KEYS.USERS, JSON.stringify(allUsers));
-
-      if (user.hasShop && user.shopId) {
-        const shopsString = localStorage.getItem(LOCAL_STORAGE_KEYS.SHOPS);
-        let allShops: Shop[] = shopsString ? JSON.parse(shopsString) : [];
-        allShops = allShops.filter(s => s.id !== user.shopId);
-        localStorage.setItem(LOCAL_STORAGE_KEYS.SHOPS, JSON.stringify(allShops));
-
-        localStorage.removeItem(`${LOCAL_STORAGE_KEYS.SHOP_PRODUCTS_PREFIX}${user.shopId}`);
-        
-        const allProdsString = localStorage.getItem(LOCAL_STORAGE_KEYS.ALL_PRODUCTS);
-        if (allProdsString) {
-            let allDisplayProds: AppProduct[] = JSON.parse(allProdsString);
-            allDisplayProds = allDisplayProds.filter(p => p.shopId !== user.shopId);
-            localStorage.setItem(LOCAL_STORAGE_KEYS.ALL_PRODUCTS, JSON.stringify(allDisplayProds));
-        }
+      localStorage.removeItem('authToken'); 
+      localStorage.removeItem(LOCAL_STORAGE_KEYS.LOGGED_IN_USER);
+      if (user.id) {
+        localStorage.removeItem(`${LOCAL_STORAGE_KEYS.USER_RENTALS_PREFIX}${user.id}`);
+        // Komentari bagian SHOP_DETAILS_PREFIX karena tidak ada di LOCAL_STORAGE_KEYS Anda
+        // const shopKey = Object.keys(localStorage).find(key => key.startsWith(LOCAL_STORAGE_KEYS.SHOP_DETAILS_PREFIX) && localStorage.getItem(key)?.includes(`"owner":"${user.id}"`));
+        // if (shopKey) localStorage.removeItem(shopKey);
       }
       
-      localStorage.removeItem(`${LOCAL_STORAGE_KEYS.USER_RENTALS_PREFIX}${user.id}`);
-      
-      logout(); 
-      alert('Account deleted successfully!');
+      logout(); // Panggil logout tanpa argumen
+      alert('Account related local data cleared. Please contact support for full backend data deletion.');
       navigate('/');
     }
   };
 
-   const getStatusIconAndColorClass = (status: string | undefined) => {
-    if (!status) return { icon: <Package size={16} className="mr-1 text-gray-700" />, colorClass: 'bg-gray-100 text-gray-700' };
+   const getStatusIconAndColorClass = (statusParam: OrderStatus | undefined) => { // Menggunakan OrderStatus
+    const status = statusParam || 'unknown'; // Default jika undefined
     switch (status.toLowerCase()) {
       case 'active':
-      case 'disewa':
+      case 'rented_out':
       case 'confirmed':
-        return { icon: <CheckCircle size={16} className="mr-1" />, colorClass: 'bg-green-100 text-green-700' };
+        return { icon: <CheckCircle size={16} className="mr-1 text-green-600" />, colorClass: 'bg-green-100 text-green-700' };
       case 'completed':
-      case 'selesai':
-        return { icon: <CheckCircle size={16} className="mr-1" />, colorClass: 'bg-blue-100 text-blue-700' };
+        return { icon: <CheckCircle size={16} className="mr-1 text-blue-600" />, colorClass: 'bg-blue-100 text-blue-700' };
       case 'cancelled':
-      case 'dibatalkan':
-        return { icon: <XCircle size={16} className="mr-1" />, colorClass: 'bg-red-100 text-red-700' };
+        return { icon: <XCircle size={16} className="mr-1 text-red-600" />, colorClass: 'bg-red-100 text-red-700' };
       case 'pending':
-      case 'menunggu konfirmasi':
-        return { icon: <AlertTriangle size={16} className="mr-1" />, colorClass: 'bg-yellow-100 text-yellow-700' };
+      case 'pending_whatsapp':
+        return { icon: <AlertTriangle size={16} className="mr-1 text-yellow-600" />, colorClass: 'bg-yellow-100 text-yellow-700' };
       default:
-        return { icon: <Package size={16} className="mr-1" />, colorClass: 'bg-gray-100 text-gray-700' };
+        return { icon: <ShoppingBag size={16} className="mr-1 text-gray-700" />, colorClass: 'bg-gray-100 text-gray-700' };
     }
   };
 
-  if (!user) { // Seharusnya sudah ditangani oleh !isAuthenticated, tapi untuk keamanan
-    return <div className="text-center py-10">User data not available. Please log in.</div>;
+  if (authLoading && !user) {
+    return <div className="flex justify-center items-center min-h-screen"><Loader2 className="h-8 w-8 animate-spin text-primary-600" /></div>;
+  }
+
+  if (!isAuthenticated || !user) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-4">
+        <AlertTriangle className="w-12 h-12 text-yellow-500 mb-4" />
+        <h2 className="text-2xl font-semibold mb-2">Access Denied</h2>
+        <p className="text-gray-600 mb-6 text-center">You need to be logged in to view your profile.</p>
+        <Link to="/login" state={{ returnTo: location.pathname }} className="btn-primary">
+          Go to Login
+        </Link>
+      </div>
+    );
   }
   
   return (
@@ -194,8 +339,8 @@ const ProfilePage: React.FC = () => {
                   <div className="w-20 h-20 bg-primary-100 rounded-full flex items-center justify-center mb-3">
                     <UserIcon size={32} className="text-primary-600" />
                   </div>
-                  <h2 className="font-semibold text-lg">{user.name}</h2>
-                  <p className="text-gray-500 text-sm">{user.email}</p>
+                  <h2 className="font-semibold text-lg">{profileData.name || user.username}</h2>
+                  <p className="text-gray-500 text-sm">{profileData.email || user.email}</p>
                   
                   {user.hasShop ? (
                     <Link 
@@ -208,50 +353,33 @@ const ProfilePage: React.FC = () => {
                   ) : (
                     <Link 
                       to="/create-shop" 
-                      className="mt-3 text-sm text-primary-600 font-medium hover:text-primary-700"
+                      className="mt-3 text-sm text-green-600 font-medium hover:text-green-700 flex items-center"
                     >
-                      Create Shop
+                      <Building size={16} className="mr-1" /> Create Shop
                     </Link>
                   )}
                 </div>
               </div>
               
               <div className="p-4">
-                <button 
-                  onClick={() => setActiveTab('profile')}
-                  className={`flex items-center w-full px-4 py-2 rounded-md text-left mb-1 ${
-                    activeTab === 'profile' 
-                      ? 'bg-primary-50 text-primary-700' 
-                      : 'hover:bg-gray-50 text-gray-700'
-                  } transition-colors duration-150`}
-                >
-                  <UserIcon size={18} className="mr-3" />
-                  Profile Information
-                </button>
-                
-                <button 
-                  onClick={() => setActiveTab('rentals')}
-                  className={`flex items-center w-full px-4 py-2 rounded-md text-left mb-1 ${
-                    activeTab === 'rentals' 
-                      ? 'bg-primary-50 text-primary-700' 
-                      : 'hover:bg-gray-50 text-gray-700'
-                  } transition-colors duration-150`}
-                >
-                  <Package size={18} className="mr-3" />
-                  Rental History
-                </button>
-                
-                <button 
-                  onClick={() => setActiveTab('security')}
-                  className={`flex items-center w-full px-4 py-2 rounded-md text-left ${
-                    activeTab === 'security' 
-                      ? 'bg-primary-50 text-primary-700' 
-                      : 'hover:bg-gray-50 text-gray-700'
-                  } transition-colors duration-150`}
-                >
-                  <Lock size={18} className="mr-3" />
-                  Security
-                </button>
+                {[
+                    { id: 'profile', label: 'Profile Information', icon: UserIcon },
+                    { id: 'rentals', label: 'Rental History', icon: ShoppingBag },
+                    { id: 'security', label: 'Security', icon: Lock },
+                ].map((tabItem) => (
+                    <button 
+                    key={tabItem.id}
+                    onClick={() => setActiveTab(tabItem.id as 'profile' | 'rentals' | 'security')}
+                    className={`flex items-center w-full px-4 py-2 rounded-md text-left mb-1 ${
+                        activeTab === tabItem.id 
+                        ? 'bg-primary-50 text-primary-700' 
+                        : 'hover:bg-gray-50 text-gray-700'
+                    } transition-colors duration-150`}
+                    >
+                    <tabItem.icon size={18} className="mr-3" />
+                    {tabItem.label}
+                    </button>
+                ))}
               </div>
             </div>
           </div>
@@ -259,14 +387,14 @@ const ProfilePage: React.FC = () => {
           <div className="flex-1">
             {activeTab === 'profile' && (
               <div className="bg-white rounded-lg shadow-sm">
-                <div className="p-6 border-b flex items-center justify-between"> {/* p-6 agar padding konsisten */}
-                  <h2 className="font-semibold text-xl">Profile Information</h2> {/* text-xl */}
+                <div className="p-6 border-b flex items-center justify-between">
+                  <h2 className="font-semibold text-xl">Profile Information</h2>
                   {!isEditingProfile && (
                     <button 
                       onClick={() => setIsEditingProfile(true)}
-                      className="btn-secondary btn-sm flex items-center" // btn-sm untuk tombol lebih kecil
+                      className="btn-secondary btn-sm flex items-center"
                     >
-                      <Edit size={14} className="mr-1" /> Edit
+                      <Edit size={14} className="mr-1" /> Edit {/* Menggunakan Edit */}
                     </button>
                   )}
                 </div>
@@ -290,8 +418,9 @@ const ProfilePage: React.FC = () => {
                       <textarea name="address" id="address" value={profileData.address} onChange={handleProfileInputChange} rows={3} className="input w-full" placeholder="e.g., Jl. Merdeka No. 10, Kota Bandung" />
                     </div>
                     <div className="flex justify-end gap-3 pt-4 border-t">
-                      <button type="button" onClick={() => { setIsEditingProfile(false); setProfileData({name: user.name, email: user.email, phone: user.phone || '', address: user.address || ''});}} className="btn-secondary">Cancel</button>
-                      <button type="submit" className="btn-primary flex items-center">
+                      <button type="button" onClick={() => { setIsEditingProfile(false); if(user) setProfileData({name: user.name || `${user.first_name || ''} ${user.last_name || ''}`.trim(), email: user.email || '', phone: user.phone || '', address: user.address || ''});}} className="btn-secondary" disabled={isUpdatingProfile}>Cancel</button>
+                      <button type="submit" className="btn-primary flex items-center" disabled={isUpdatingProfile}>
+                        {isUpdatingProfile && <Loader2 className="animate-spin h-4 w-4 mr-2 inline-block"/>}
                         <Save size={16} className="mr-2" /> Save Changes
                       </button>
                     </div>
@@ -303,28 +432,28 @@ const ProfilePage: React.FC = () => {
                         <UserIcon size={20} className="text-gray-400 mr-3 flex-shrink-0" />
                         <div>
                           <h3 className="text-xs text-gray-500">Full Name</h3>
-                          <p className="font-medium text-gray-800">{user.name}</p>
+                          <p className="font-medium text-gray-800">{profileData.name || user.username}</p>
                         </div>
                       </div>
                       <div className="flex items-center">
                         <Mail size={20} className="text-gray-400 mr-3 flex-shrink-0" />
                         <div>
                           <h3 className="text-xs text-gray-500">Email Address</h3>
-                          <p className="font-medium text-gray-800">{user.email}</p>
+                          <p className="font-medium text-gray-800">{profileData.email || user.email}</p>
                         </div>
                       </div>
                       <div className="flex items-center">
                         <Phone size={20} className="text-gray-400 mr-3 flex-shrink-0" />
                         <div>
                           <h3 className="text-xs text-gray-500">Phone Number</h3>
-                          <p className="font-medium text-gray-500 italic">{user.phone || 'Not provided'}</p>
+                          <p className="font-medium text-gray-500 italic">{profileData.phone || 'Not provided'}</p>
                         </div>
                       </div>
-                      <div className="flex items-start"> {/* items-start untuk alamat panjang */}
+                      <div className="flex items-start">
                         <MapPin size={20} className="text-gray-400 mr-3 mt-0.5 flex-shrink-0" />
                         <div>
                           <h3 className="text-xs text-gray-500">Address</h3>
-                          <p className="font-medium text-gray-500 italic whitespace-pre-line">{user.address || 'Not provided'}</p>
+                          <p className="font-medium text-gray-500 italic whitespace-pre-line">{profileData.address || 'Not provided'}</p>
                         </div>
                       </div>
                     </div>
@@ -335,61 +464,77 @@ const ProfilePage: React.FC = () => {
             
             {activeTab === 'rentals' && (
               <div className="bg-white rounded-lg shadow-sm">
-                <div className="p-6 border-b"> {/* p-6 agar konsisten */}
-                  <h2 className="font-semibold text-xl">Rental History</h2> {/* text-xl */}
+                <div className="p-6 border-b">
+                  <h2 className="font-semibold text-xl">Rental History</h2>
                 </div>
-                
                 {isLoadingRentals ? (
-                    <div className="p-6 text-center text-gray-500">Loading rental history...</div>
-                ) : rentalHistory.length > 0 ? (
+                    <div className="p-10 text-center">
+                        <Loader2 className="h-8 w-8 animate-spin text-primary-500 mx-auto mb-2" />
+                        <p className="text-gray-600">Loading your rental history...</p>
+                    </div>
+                ) : rentalFetchError ? (
+                    <div className="p-6 bg-red-50 border border-red-200 text-red-700 rounded-md m-4">
+                        <div className="flex items-center">
+                            <AlertTriangle className="h-5 w-5 mr-2" />
+                            <p className="font-medium">Error loading rentals:</p>
+                        </div>
+                        <p className="text-sm ml-7">{rentalFetchError}</p>
+                        <button onClick={fetchUserRentals} className="btn-secondary btn-sm mt-3 ml-7">Try Again</button>
+                    </div>
+                ) : userRentalsFromApi.length > 0 ? (
                   <div className="divide-y divide-gray-200">
-                    {rentalHistory.map((rental) => {
+                    {userRentalsFromApi.map((rental) => {
                        const statusStyle = getStatusIconAndColorClass(rental.status);
                        return (
-                        <div key={rental.id || rental.orderId} className="p-4 md:p-6 hover:bg-gray-50 transition-colors">
+                        <div key={rental.id} className="p-4 md:p-6 hover:bg-gray-50 transition-colors">
                             <div className="flex flex-col md:flex-row gap-4">
-                              <div className="w-full md:w-24 h-24 bg-gray-100 rounded-md overflow-hidden flex-shrink-0">
-                                  <img 
-                                  src={rental.image || 'https://via.placeholder.com/96x96.png?text=No+Image'} 
-                                  alt={rental.product} 
-                                  className="w-full h-full object-cover"
-                                  />
-                              </div>
-                              
+                              <img 
+                                src={rental.image || placeholderImage}
+                                alt={rental.product} 
+                                className="w-full md:w-24 h-32 md:h-24 object-cover rounded-md bg-gray-100 flex-shrink-0"
+                              />
                               <div className="flex-1">
-                                  <div className="flex flex-col md:flex-row md:justify-between md:items-start">
-                                    <div className="mb-2 md:mb-0">
-                                        <h3 className="font-semibold text-gray-800">{rental.product}</h3>
-                                        <p className="text-sm text-gray-500">Shop: <Link to={`/shops/${rental.shopId}`} className="hover:underline text-primary-600">{rental.shopName}</Link></p>
-                                        <p className="text-sm text-gray-500">
-                                        {format(new Date(rental.startDate), 'MMM dd, yyyy')} to {format(new Date(rental.endDate), 'MMM dd, yyyy')}
-                                        </p>
-                                    </div>
-                                    
-                                    <div className="mt-2 md:mt-0 text-left md:text-right">
-                                        <p className="font-bold text-gray-800">${rental.total.toFixed(2)}</p>
-                                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium mt-1 ${statusStyle.colorClass}`}>
-                                          {statusStyle.icon}
-                                          <span className="ml-1">{rental.status.charAt(0).toUpperCase() + rental.status.slice(1)}</span>
-                                        </span>
-                                    </div>
+                                <div className="flex flex-col md:flex-row md:justify-between md:items-start">
+                                  <div className="mb-2 md:mb-0">
+                                      <h3 className="font-semibold text-gray-800">{rental.product}</h3>
+                                      <p className="text-sm text-gray-500">Shop: 
+                                        {rental.shopId ? (
+                                            <Link to={`/shops/${rental.shopId}`} className="hover:underline text-primary-600">{rental.shopName}</Link>
+                                        ) : (
+                                            rental.shopName || 'N/A'
+                                        )}
+                                      </p>
+                                      <p className="text-sm text-gray-500">
+                                        Period: {formatDate(rental.startDate)} - {formatDate(rental.endDate)}
+                                      </p>
                                   </div>
-                                  
-                                  <div className="mt-3 flex flex-wrap gap-3">
-                                    <Link to={`/profile/orders/${rental.orderId}`} className="btn-secondary btn-sm text-xs">
-                                      View Details
-                                    </Link>
-                                    {rental.status === 'completed' && (
-                                      <button className="btn-primary btn-sm text-xs">
-                                        Write Review
-                                      </button>
-                                    )}
-                                    {(rental.status === 'active' || rental.status === 'confirmed' || rental.status === 'pending') && (
-                                      <button className="btn-secondary btn-sm text-xs text-red-600 border-red-300 hover:bg-red-50 hover:border-red-500">
-                                        Cancel Rental
-                                      </button>
-                                    )}
+                                  <div className="mt-2 md:mt-0 text-left md:text-right">
+                                      <p className="font-bold text-lg text-gray-800">${rental.total.toFixed(2)}</p>
+                                      <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium mt-1 ${statusStyle.colorClass}`}>
+                                        {statusStyle.icon}
+                                        <span className="ml-1">{rental.status ? rental.status.charAt(0).toUpperCase() + rental.status.slice(1).replace('_', ' ') : 'Unknown'}</span>
+                                      </span>
                                   </div>
+                                </div>
+                                <p className="text-xs text-gray-400 mt-1">Order ID: {rental.orderId}</p>
+                                {rental.items && rental.items.length > 0 && (
+                                    <div className="mt-2 pt-2 border-t border-gray-100">
+                                        <p className="text-xs font-medium text-gray-500 mb-1">Items:</p>
+                                        <ul className="list-disc list-inside space-y-0.5">
+                                            {rental.items.map((item, idx) => (
+                                                <li key={item.productId + idx} className="text-xs text-gray-600">
+                                                    {item.name} (Qty: {item.quantity})
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                )}
+                                <div className="mt-3 flex flex-wrap gap-3">
+                                  <Link to={`/profile/orders/${rental.orderId}`} className="btn-secondary btn-sm text-xs">
+                                    View Details
+                                  </Link>
+                                  {/* Tambahkan tombol lain jika perlu */}
+                                </div>
                               </div>
                             </div>
                         </div>
@@ -398,7 +543,7 @@ const ProfilePage: React.FC = () => {
                   </div>
                 ) : (
                   <div className="p-10 text-center">
-                    <Package size={40} className="text-gray-400 mx-auto mb-4" />
+                    <ShoppingBag size={40} className="text-gray-400 mx-auto mb-4" />
                     <p className="text-gray-600">You haven't rented any products yet.</p>
                     <Link to="/products" className="btn-primary mt-6">
                       Browse Products
@@ -410,33 +555,32 @@ const ProfilePage: React.FC = () => {
             
             {activeTab === 'security' && (
               <div className="bg-white rounded-lg shadow-sm">
-                <div className="p-6 border-b"> {/* p-6 agar konsisten */}
-                  <h2 className="font-semibold text-xl">Security</h2> {/* text-xl */}
+                <div className="p-6 border-b">
+                  <h2 className="font-semibold text-xl">Security</h2>
                 </div>
-                
                 <div className="p-6">
                   <div className="mb-8 pb-6 border-b border-gray-200">
-                    <h3 className="font-semibold text-lg text-gray-800 mb-4">Change Password</h3> {/* text-lg */}
+                    <h3 className="font-semibold text-lg text-gray-800 mb-4">Change Password</h3>
                     <form onSubmit={handleChangePassword} className="space-y-4 max-w-md">
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Current Password</label>
-                        <input type="password" name="currentPassword" value={passwordData.currentPassword} onChange={handlePasswordInputChange} className="input w-full" required />
+                        <input type="password" name="currentPassword" value={passwordData.currentPassword} onChange={handlePasswordInputChange} className="input w-full" required disabled={isUpdatingProfile} />
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">New Password</label>
-                        <input type="password" name="newPassword" value={passwordData.newPassword} onChange={handlePasswordInputChange} className="input w-full" required />
+                        <input type="password" name="newPassword" value={passwordData.newPassword} onChange={handlePasswordInputChange} className="input w-full" required disabled={isUpdatingProfile}/>
                         <p className="mt-1 text-xs text-gray-500">Must be at least 6 characters.</p>
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Confirm New Password</label>
-                        <input type="password" name="confirmNewPassword" value={passwordData.confirmNewPassword} onChange={handlePasswordInputChange} className="input w-full" required />
+                        <input type="password" name="confirmNewPassword" value={passwordData.confirmNewPassword} onChange={handlePasswordInputChange} className="input w-full" required disabled={isUpdatingProfile}/>
                       </div>
-                      <button type="submit" className="btn-primary">
+                      <button type="submit" className="btn-primary" disabled={isUpdatingProfile}>
+                        {isUpdatingProfile && <Loader2 className="animate-spin h-4 w-4 mr-2 inline-block"/>}
                         Update Password
                       </button>
                     </form>
                   </div>
-                  
                   <div>
                     <h3 className="font-semibold text-lg text-red-600 mb-2">Danger Zone</h3>
                     <p className="text-sm text-gray-600 mb-4">
@@ -444,7 +588,7 @@ const ProfilePage: React.FC = () => {
                     </p>
                     <button 
                       onClick={handleDeleteAccount}
-                      className="bg-red-600 text-white hover:bg-red-700 focus-visible:ring-red-500 btn flex items-center"
+                      className="btn bg-red-600 hover:bg-red-700 text-white flex items-center"
                     >
                       <AlertTriangle size={16} className="mr-2" /> Delete Account
                     </button>
@@ -452,6 +596,12 @@ const ProfilePage: React.FC = () => {
                 </div>
               </div>
             )}
+             <div className="mt-10 pt-6 border-t text-center">
+                {/* Menggunakan _handleLogout untuk menghindari konflik nama jika ada */}
+                <button onClick={_handleLogout} className="btn-secondary text-sm flex items-center justify-center mx-auto">
+                    <LogOut size={16} className="mr-2"/> Log Out
+                </button>
+            </div>
           </div>
         </div>
       </div>

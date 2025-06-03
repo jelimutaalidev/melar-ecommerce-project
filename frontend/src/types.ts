@@ -149,4 +149,5 @@ export interface UserRental { // Ini lebih seperti "Histori Sewa dari sisi Pengg
   total: number;
   items: OrderItem[]; 
   customerId: string; // Untuk memastikan ini milik user yang login
+  displayDate?: string;
 }
