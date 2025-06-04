@@ -3,13 +3,13 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { ArrowLeft, Package, CheckCircle, XCircle, AlertTriangle, Store as StoreIcon, Loader2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import type { ShopOrder, OrderItem, OrderStatus, User as AuthUserType } from '../types';
+import type { ShopOrder, OrderItem, OrderStatus, AppProduct } from '../types';
 import { format } from 'date-fns';
 import { apiClient } from '../utils/apiClient';
 
 const formatDate = (dateString?: string) => {
   if (!dateString) return 'N/A';
-  const dateObj = new Date(dateString.includes('T') ? dateString : dateString + 'T00:00:00');
+  const dateObj = new Date(dateString.includes('T') ? dateString : dateString + 'T00:00:00Z');
   if (isNaN(dateObj.getTime())) {
     return 'Invalid Date';
   }
@@ -26,11 +26,10 @@ const OrderDetailPage: React.FC = () => {
   const isMountedRef = useRef(true);
 
   const [order, setOrder] = useState<ShopOrder | null>(null);
-  const [isLoading, setIsLoading] = useState(true); // State loading umum untuk fetch dan cancel
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const fetchOrderDetails = useCallback(async () => {
-    // ... (isi fungsi fetchOrderDetails sama seperti kode terakhir yang berhasil) ...
     if (!orderId) {
       if (isMountedRef.current) {
         setError("Order ID is missing.");
@@ -50,11 +49,11 @@ const OrderDetailPage: React.FC = () => {
       setIsLoading(true);
       setError(null);
     }
-    console.log(`[OrderDetailPage] Fetching order details for ID: ${orderId}`);
+    console.log(`[OrderDetailPage DEBUG] fetchOrderDetails: Fetching order details for ID: ${orderId}. Current user ID: ${user?.id}, User Shop ID from AuthContext: ${user?.shopId}`);
 
     try {
       const dataFromApi: any = await apiClient.get(`/orders/${orderId}/`);
-      console.log("[OrderDetailPage] Raw order data from API:", JSON.stringify(dataFromApi, null, 2));
+      console.log("[OrderDetailPage DEBUG] fetchOrderDetails: Raw order data from API:", JSON.stringify(dataFromApi, null, 2));
 
       if (!isMountedRef.current) return;
 
@@ -62,23 +61,38 @@ const OrderDetailPage: React.FC = () => {
         throw new Error("Order not found or invalid data received from server.");
       }
 
-      const processedItems: OrderItem[] = (dataFromApi.items || []).map((itemApi: any): OrderItem => ({
-        productId: String(itemApi.product?.id || itemApi.product_id || ''),
-        name: itemApi.product_name || itemApi.product?.name || 'Unknown Item',
-        quantity: parseInt(String(itemApi.quantity), 10) || 1,
-        pricePerDay: parseFloat(String(itemApi.price_per_day_at_rental || itemApi.product?.price || 0)),
-        image: itemApi.product_image || itemApi.product?.main_image || itemApi.product?.images?.[0] || placeholderImage,
-        startDate: itemApi.start_date,
-        endDate: itemApi.end_date,
-        item_total: parseFloat(String(itemApi.item_total || 0)),
-        product: itemApi.product
-      }));
+      const processedItems: OrderItem[] = (dataFromApi.items || []).map((itemApi: any): OrderItem => {
+        const productDetail = itemApi.product; 
+        console.log(`[OrderDetailPage DEBUG] fetchOrderDetails - Processing itemApi.product (productDetail):`, JSON.stringify(productDetail, null, 2));
+        return {
+          productId: String(productDetail?.id || itemApi.product_id || ''), 
+          name: productDetail?.name || itemApi.product_name || 'Unknown Item',
+          quantity: parseInt(String(itemApi.quantity), 10) || 1,
+          pricePerDay: parseFloat(String(itemApi.price_per_day_at_rental || productDetail?.price || 0)),
+          image: productDetail?.main_image || itemApi.product_image || placeholderImage, 
+          startDate: itemApi.start_date,
+          endDate: itemApi.end_date,
+          item_total: parseFloat(String(itemApi.item_total || 0)),
+          product: productDetail as Partial<AppProduct> 
+        };
+      });
+      
+      console.log("[OrderDetailPage DEBUG] fetchOrderDetails: Processed items from API:", JSON.stringify(processedItems, null, 2));
 
       let primaryShopId = '';
       let primaryShopName = 'N/A';
       if (processedItems.length > 0 && processedItems[0].product) {
-        primaryShopId = String(processedItems[0].product.shopId || processedItems[0].product.owner?.id || '');
-        primaryShopName = processedItems[0].product.shop_name || processedItems[0].product.owner?.name || 'Unknown Shop';
+        const firstProductData = processedItems[0].product as any; 
+        
+        primaryShopId = String(firstProductData.shop_id || ''); 
+        primaryShopName = firstProductData.shop_name || 'Unknown Shop';
+        
+        console.log(`[OrderDetailPage DEBUG] fetchOrderDetails: Extracted from first item's product: primaryShopId='${primaryShopId}', primaryShopName='${primaryShopName}'`);
+        if (!primaryShopId) {
+            console.warn(`[OrderDetailPage DEBUG] fetchOrderDetails: primaryShopId is empty. firstProductData was:`, JSON.stringify(firstProductData, null, 2));
+        }
+      } else {
+        console.warn("[OrderDetailPage DEBUG] fetchOrderDetails: No processed items or first item has no product details to extract shopId/shopName.");
       }
 
       const mappedOrder: ShopOrder = {
@@ -108,17 +122,19 @@ const OrderDetailPage: React.FC = () => {
         } : undefined,
         customerId: String(dataFromApi.user?.id || ''),
         customerName: dataFromApi.user?.username || `${dataFromApi.first_name || ''} ${dataFromApi.last_name || ''}`.trim() || 'N/A',
-        shopId: primaryShopId,
+        shopId: primaryShopId, 
         shopName: primaryShopName,
         rentalPeriod: dataFromApi.rentalPeriod || (processedItems.length > 0 ?
           { startDate: processedItems[0].startDate || '', endDate: processedItems[0].endDate || '' } :
           { startDate: '', endDate: ''}),
       };
+
       if (isMountedRef.current) {
         setOrder(mappedOrder);
+        console.log("[OrderDetailPage DEBUG] fetchOrderDetails: Mapped order set to state:", JSON.stringify(mappedOrder, null, 2));
       }
     } catch (err: any) {
-      console.error("Error fetching order details:", err);
+      console.error("[OrderDetailPage DEBUG] fetchOrderDetails: Error fetching order details:", err.response?.data || err.message || err);
       if (isMountedRef.current) {
         setError(err.response?.data?.detail || err.message || "Failed to load order details.");
         setOrder(null);
@@ -128,19 +144,25 @@ const OrderDetailPage: React.FC = () => {
         setIsLoading(false);
       }
     }
-  }, [orderId, user, isAuthenticated]);
+  }, [orderId, user, isAuthenticated]); 
 
   useEffect(() => {
     isMountedRef.current = true;
-    fetchOrderDetails();
+    if (isAuthenticated && user) { 
+        fetchOrderDetails();
+    } else if (!isAuthenticated && !isLoading) { 
+        setError("User not authenticated. Please log in.");
+        setIsLoading(false); 
+        console.log("[OrderDetailPage DEBUG] useEffect: User not authenticated, not fetching details.");
+    }
     return () => {
       isMountedRef.current = false;
     };
-  }, [fetchOrderDetails]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps 
+  }, [orderId, isAuthenticated, user]); 
 
 
   const getStatusIconAndColorClass = (statusParam: OrderStatus | undefined) => {
-    // ... (isi fungsi getStatusIconAndColorClass sama seperti kode terakhir yang berhasil) ...
     const status = statusParam || 'unknown';
     switch (status.toLowerCase()) {
       case 'active':
@@ -159,11 +181,52 @@ const OrderDetailPage: React.FC = () => {
     }
   };
 
-  if (isLoading && !order && !error) { // Hanya tampilkan loading utama jika order belum ada dan tidak ada error
+  if (order && user) {
+    console.log('%c[OrderDetailPage DEBUG] Role Check for UI Elements:', 'color: blue; font-weight: bold;');
+    console.log('  User (from AuthContext):', JSON.stringify(user, null, 2));
+    console.log('  Order (current state):', JSON.stringify(order, null, 2));
+    console.log('  Values for Shop Owner UI condition:');
+    console.log(`    user.shopId: '${user.shopId}' (type: ${typeof user.shopId})`);
+    console.log(`    order.shopId: '${order.shopId}' (type: ${typeof order.shopId})`);
+    console.log(`    user.hasShop: ${user.hasShop}`);
+    const isShopOwnerOfThisOrder = user.shopId && order.shopId && String(user.shopId) === String(order.shopId) && user.hasShop;
+    console.log('  Calculated isShopOwnerOfThisOrder:', isShopOwnerOfThisOrder);
+
+    if (isShopOwnerOfThisOrder) {
+      console.log('%c    DEBUG: Dropdown for shop owner SHOULD be visible.', 'color: green;');
+    } else {
+        if (!user.hasShop) {
+            console.log('%c    DEBUG: User does not own a shop (user.hasShop is false). Dropdown NOT visible.', 'color: orange;');
+        } else if (!user.shopId) {
+            console.log('%c    DEBUG: User owns a shop, but user.shopId from AuthContext is missing/empty. Dropdown NOT visible.', 'color: orange;');
+        } else if (!order.shopId) {
+            console.log('%c    DEBUG: order.shopId (derived from order items) is missing/empty. Dropdown NOT visible.', 'color: orange;');
+        } else if (String(user.shopId) !== String(order.shopId)) {
+            console.log(`%c    DEBUG: User is a shop owner (AuthContext shopId: '${user.shopId}') but this order is for a different shop (order.shopId: '${order.shopId}'). Dropdown NOT visible.`, 'color: orange;');
+        } else {
+            console.log('%c    DEBUG: Some other reason shop owner UI is not visible. Check individual values.', 'color: red;');
+        }
+    }
+    const isCustomer = user.id && order.customerId && String(user.id) === String(order.customerId);
+    console.log('  Values for Customer UI condition:');
+    console.log(`    user.id: '${user.id}' (type: ${typeof user.id})`);
+    console.log(`    order.customerId: '${order.customerId}' (type: ${typeof order.customerId})`);
+    console.log('  Calculated isCustomer:', isCustomer);
+
+    if (isCustomer && (order.status === 'pending' || order.status === 'confirmed' || order.status === 'pending_whatsapp')) {
+      console.log('%c    DEBUG: Cancel button for customer SHOULD be visible.', 'color: green;');
+    } else if (isCustomer) {
+      console.log(`%c    DEBUG: Customer is viewing, but order status ('${order.status}') does not allow cancellation. Cancel button NOT visible.`, 'color: orange;');
+    }
+  } else {
+    console.log('[OrderDetailPage DEBUG] Role Check for UI Elements: Order or User object is not yet available.');
+  }
+
+  if (isLoading && !order && !error) {
     return <div className="container-custom py-10 text-center flex justify-center items-center min-h-[calc(100vh-200px)]"><Loader2 className="h-10 w-10 animate-spin text-primary-600" /> <span className="ml-3 text-lg">Loading order details...</span></div>;
   }
 
-  if (error && !isLoading) { // Tampilkan error hanya jika loading selesai
+  if (error && !isLoading) { 
     return (
       <div className="container-custom py-10 text-center min-h-[calc(100vh-200px)] flex flex-col justify-center items-center">
         <AlertTriangle size={48} className="text-red-400 mx-auto mb-4" />
@@ -175,7 +238,7 @@ const OrderDetailPage: React.FC = () => {
     );
   }
 
-  if (!order && !isLoading) { // Tampilkan "Order Not Found" hanya jika loading selesai dan tidak ada order
+  if (!order && !isLoading) { 
     return (
       <div className="container-custom py-10 text-center min-h-[calc(100vh-200px)] flex flex-col justify-center items-center">
         <Package size={48} className="text-gray-400 mx-auto mb-4" />
@@ -186,15 +249,54 @@ const OrderDetailPage: React.FC = () => {
     );
   }
   
-  // Jika order ada, tampilkan detailnya, isLoading bisa true jika sedang ada proses lain seperti cancel
-  if (!order) { // Fallback jika order masih null setelah kondisi di atas
+  if (!order) { 
       return <div className="container-custom py-10 text-center">Preparing order details...</div>;
   }
 
-
   const grandTotal = order.total_price;
-  const shopIdForLink = order.shopId;
-  const shopNameDisplay = order.shopName;
+  const shopIdForLink = order.shopId; 
+  const shopNameDisplay = order.shopName; 
+
+  const handleStatusChange = async (event: React.ChangeEvent<HTMLSelectElement>) => {
+    if (!order || !user || !(user.shopId && order.shopId && String(user.shopId) === String(order.shopId) && user.hasShop)) {
+        console.error("[OrderDetailPage_StatusChange] Pre-condition for status change failed. User/Order data might be inconsistent.");
+        return;
+    }
+
+    const newStatus = event.target.value as OrderStatus;
+    const currentStatus = order.status;
+
+    // Jika status baru sama dengan status saat ini, tidak perlu melakukan apa-apa
+    if (newStatus === currentStatus) {
+        console.log(`[OrderDetailPage_StatusChange] Status is already '${newStatus}'. No change needed.`);
+        return;
+    }
+
+    const confirmChange = window.confirm(
+        `Are you sure you want to change the order status from "${currentStatus.replace(/_/g, ' ')}" to "${newStatus.replace(/_/g, ' ')}"?`
+    );
+
+    if (confirmChange) {
+        setIsLoading(true); 
+        console.log(`[OrderDetailPage_StatusChange] Shop Owner (User ID: ${user?.id}, Shop ID: ${user?.shopId}) CONFIRMED change status for order ${order.id} (Order Shop ID: ${order.shopId}) to ${newStatus}`);
+        try {
+            await apiClient.patch(`/orders/${order.id}/`, { status: newStatus });
+            alert(`Order status updated to ${newStatus}`);
+            await fetchOrderDetails(); 
+        } catch (statusError: any) {
+             console.error("[OrderDetailPage_StatusChange_Error] Error updating status:", JSON.stringify(statusError.response?.data || statusError.message, null, 2));
+             alert(`Failed to update status: ${statusError.response?.data?.detail || statusError.message}`);
+             if (isMountedRef.current) {
+                await fetchOrderDetails();
+             }
+        }
+    } else {
+        console.log(`[OrderDetailPage_StatusChange] Shop Owner CANCELED status change for order ${order.id} from ${currentStatus} to ${newStatus}`);
+        // Karena <select> adalah komponen terkontrol, React akan merender ulang dengan order.status yang lama (dari state)
+        // jika tidak ada perubahan state. Tidak perlu manipulasi event.target.value.
+    }
+  };
+
 
   return (
     <div className="bg-gray-50 min-h-screen pb-16 fade-in">
@@ -221,11 +323,10 @@ const OrderDetailPage: React.FC = () => {
             </div>
             <div className={`flex items-center mt-3 sm:mt-0 px-3 py-1.5 rounded-full text-sm font-medium capitalize ${getStatusIconAndColorClass(order.status).colorClass}`}>
               {getStatusIconAndColorClass(order.status).icon}
-              <span className="ml-2">{order.status ? order.status.charAt(0).toUpperCase() + order.status.slice(1).replace('_', ' ') : 'Unknown'}</span>
+              <span className="ml-2">{order.status ? order.status.charAt(0).toUpperCase() + order.status.slice(1).replace(/_/g, ' ') : 'Unknown'}</span>
             </div>
           </div>
 
-          {/* ... (JSX untuk Billing & Contact Information, Overall Rental Period, Items Rented, Grand Total SAMA seperti kode terakhir yang berhasil) ... */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-6">
             <div>
               <h2 className="text-lg font-semibold mb-3">Billing & Contact Information</h2>
@@ -268,13 +369,20 @@ const OrderDetailPage: React.FC = () => {
               {order.items.map((item, index) => {
                 const itemStartDate = item.startDate || order.rentalPeriod?.startDate;
                 const itemEndDate = item.endDate || order.rentalPeriod?.endDate;
-                const rentalDays = (itemStartDate && itemEndDate && new Date(itemEndDate) >= new Date(itemStartDate)) 
-                                   ? Math.max(1, Math.ceil((new Date(itemEndDate).getTime() - new Date(itemStartDate).getTime()) / (1000 * 60 * 60 * 24)) + 1) 
-                                   : 1;
+                let rentalDays = 1;
+                if (itemStartDate && itemEndDate) {
+                    const start = new Date(itemStartDate.includes('T') ? itemStartDate : itemStartDate + 'T00:00:00Z');
+                    const end = new Date(itemEndDate.includes('T') ? itemEndDate : itemEndDate + 'T00:00:00Z');
+                    if (end >= start) {
+                        const diffTime = Math.abs(end.getTime() - start.getTime());
+                        rentalDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+                    }
+                }
+                rentalDays = Math.max(1, rentalDays);
                 const calculatedItemTotal = item.pricePerDay * item.quantity * rentalDays;
 
                 return (
-                    <div key={item.productId + index} className="flex items-start sm:items-center p-3 bg-gray-50 rounded-md flex-col sm:flex-row gap-3">
+                    <div key={item.productId + '-' + index} className="flex items-start sm:items-center p-3 bg-gray-50 rounded-md flex-col sm:flex-row gap-3">
                     <img
                         src={item.image || placeholderImage}
                         alt={item.name}
@@ -300,44 +408,39 @@ const OrderDetailPage: React.FC = () => {
           </div>
 
           <div className="mt-8 pt-6 border-t flex flex-col sm:flex-row justify-between items-center gap-3">
-            {user?.id === order.customerId && (
+            {/* Customer Actions */}
+            {user?.id && order.customerId && String(user.id) === String(order.customerId) && (
                 <div className="flex flex-wrap gap-3">
                     {order.status === 'completed' && (
                         <button className="btn-primary text-sm">Write a Review for Products</button>
                     )}
-                    {/* --- BAGIAN CANCEL ORDER DENGAN DEBUGGING --- */}
                     {(order.status === 'pending' || order.status === 'confirmed' || order.status === 'pending_whatsapp') && (
                         <button 
                             onClick={async () => {
                                 console.log(`[OrderDetailPage_CancelClick] Attempting to cancel order ID: ${order.id}, Current status: ${order.status}`);
                                 if(window.confirm("Are you sure you want to cancel this rental order?")) {
-                                    setIsLoading(true); // Menandakan proses sedang berjalan
+                                    setIsLoading(true); 
                                     console.log(`[OrderDetailPage_CancelConfirm] User confirmed cancellation for order ID: ${order.id}`);
                                     try {
                                         const cancelUrl = `/orders/${order.id}/cancel-order/`;
                                         console.log(`[OrderDetailPage_CancelAPI] Calling POST to: ${cancelUrl}`);
-                                        
-                                        const response = await apiClient.post(cancelUrl, {}); // Kirim objek kosong jika tidak ada body
-                                        
+                                        const response = await apiClient.post(cancelUrl, {});
                                         console.log("[OrderDetailPage_CancelAPI] Response from cancel API:", JSON.stringify(response, null, 2));
                                         alert("Order cancelled successfully.");
-                                        fetchOrderDetails(); // Panggil fungsi fetch lagi untuk update status
+                                        await fetchOrderDetails(); 
                                     } catch (cancelError: any) {
                                         console.error("[OrderDetailPage_CancelAPI_Error] Error cancelling order:", JSON.stringify(cancelError.response?.data || cancelError.message, null, 2));
                                         alert(`Failed to cancel order: ${cancelError.response?.data?.detail || cancelError.response?.data?.error || cancelError.message}`);
-                                    } finally {
-                                        if (isMountedRef.current) { // Cek isMountedRef sebelum update state
-                                            setIsLoading(false);
-                                        }
-                                    }
+                                        if(isMountedRef.current) await fetchOrderDetails(); 
+                                    } 
                                 } else {
                                     console.log(`[OrderDetailPage_CancelClick] User declined cancellation for order ID: ${order.id}`);
                                 }
                             }}
                             className="btn-secondary text-sm text-red-600 border-red-300 hover:bg-red-50 hover:border-red-400"
-                            disabled={isLoading} // Dinonaktifkan saat loading umum atau proses cancel
+                            disabled={isLoading} 
                         >
-                            {isLoading ? <Loader2 className="animate-spin h-4 w-4 mr-1"/> : null}
+                            {isLoading && String(user.id) === String(order.customerId) ? <Loader2 className="animate-spin h-4 w-4 mr-1"/> : null} 
                             Cancel Rental
                         </button>
                     )}
@@ -348,28 +451,15 @@ const OrderDetailPage: React.FC = () => {
                     )}
                 </div>
             )}
-             {user?.shopId === order.shopId && user?.hasShop && (
+            
+            {/* Shop Owner Actions */}
+             {user?.shopId && order.shopId && String(user.shopId) === String(order.shopId) && user?.hasShop && (
                 <select
-                    value={order.status}
-                    onChange={async (e) => {
-                        const newStatus = e.target.value as OrderStatus;
-                        setIsLoading(true); // Menandakan proses
-                        console.log(`[OrderDetailPage_StatusChange] Attempting to change status for order ${order.id} to ${newStatus}`);
-                        try {
-                            await apiClient.patch(`/orders/${order.id}/`, { status: newStatus });
-                            alert(`Order status updated to ${newStatus}`);
-                            fetchOrderDetails();
-                        } catch (statusError: any) {
-                             console.error("[OrderDetailPage_StatusChange_Error] Error updating status:", JSON.stringify(statusError.response?.data || statusError.message, null, 2));
-                             alert(`Failed to update status: ${statusError.response?.data?.detail || statusError.message}`);
-                        } finally {
-                            if (isMountedRef.current) {
-                                setIsLoading(false);
-                            }
-                        }
-                    }}
-                    className="input text-sm max-w-xs"
-                    disabled={order.status === 'completed' || order.status === 'cancelled' || isLoading}
+                    value={order.status} 
+                    onChange={handleStatusChange} 
+                    className="input text-sm max-w-xs ml-auto" 
+                    // PERBAIKAN: Hanya disable jika isLoading. Biarkan pengguna mengubah dari completed/cancelled jika mereka mau.
+                    disabled={isLoading}
                 >
                     <option value="pending_whatsapp">Pending WhatsApp</option>
                     <option value="pending">Pending Confirmation</option>

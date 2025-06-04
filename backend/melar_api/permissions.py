@@ -1,6 +1,8 @@
+# backend/melar_api/permissions.py
 from rest_framework import permissions
-# Pastikan Anda mengimpor model yang benar dari aplikasi Anda
-from .models import UserProfile, Shop, ProductReview, RentalOrder, AppProduct
+# Pastikan Anda mengimpor model yang benar dari aplikasi Anda jika diperlukan untuk type hinting
+# atau logika yang lebih kompleks di dalam permission, meskipun untuk kasus ini tidak langsung digunakan.
+# from .models import UserProfile, Shop, ProductReview, RentalOrder, AppProduct
 
 class IsOwnerOrReadOnly(permissions.BasePermission):
     """
@@ -72,17 +74,49 @@ class IsReviewAuthorOrReadOnly(permissions.BasePermission):
 
 class IsOrderOwner(permissions.BasePermission):
     """
-    Custom permission to only allow owners of an order to view or modify it (if applicable).
+    Custom permission to only allow a customer (user who placed the order)
+    to access/modify their own order for specific actions like cancellation.
     Admin users can access all orders.
     """
-    def has_object_permission(self, request, view, obj):
+    def has_object_permission(self, request, view, obj): # obj is RentalOrder
+        if not request.user or not request.user.is_authenticated:
+            return False
         # Admin users can access any order.
-        if request.user and request.user.is_staff:
+        if request.user.is_staff:
             return True
 
-        # The owner of the order can access their own order.
+        # The owner of the order (customer) can access their own order.
         # obj here is a RentalOrder instance, which has a 'user' field.
         return obj.user == request.user
+
+
+class IsShopOwnerOfOrderOrCustomer(permissions.BasePermission):
+    """
+    Allows access if the user is the customer who placed the order,
+    OR if the user is the owner of the shop to which items in the order belong,
+    OR if the user is staff.
+    This is typically used for viewing or updating order status by shop owners.
+    """
+    def has_object_permission(self, request, view, obj): # obj is RentalOrder
+        if not request.user or not request.user.is_authenticated:
+            return False
+
+        if request.user.is_staff: # Admin always has access
+            return True
+
+        # Check if the request.user is the customer who created the order
+        if obj.user == request.user:
+            return True
+
+        # Check if the request.user is the owner of the shop for any item in the order
+        # This assumes that 'obj' (RentalOrder) has a related manager 'items'
+        # and each item has a 'product' which in turn has a 'shop' with an 'owner'.
+        if hasattr(request.user, 'shop') and request.user.shop:
+            # Check if any item in the order belongs to the current user's shop
+            if obj.items.filter(product__shop=request.user.shop).exists():
+                return True
+        
+        return False
 
 # Anda bisa menambahkan kelas permission lain jika dibutuhkan, misalnya:
 # class CanCreateShopPermission(permissions.BasePermission):

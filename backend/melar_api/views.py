@@ -5,6 +5,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.views import APIView # <-- Import APIView
+from django.db import models # <--- PENAMBAHAN IMPORT INI
 
 from .models import (
     UserProfile, Category, Shop, AppProduct,
@@ -19,8 +20,11 @@ from .serializers import (
 )
 # Mengimpor permission kustom yang telah kita buat
 from .permissions import (
-    IsOwnerOrReadOnly, IsShopOwnerOrReadOnlyForProduct,
-    IsReviewAuthorOrReadOnly, IsOrderOwner
+    IsOwnerOrReadOnly, 
+    IsShopOwnerOrReadOnlyForProduct,
+    IsReviewAuthorOrReadOnly, 
+    IsOrderOwner,
+    IsShopOwnerOfOrderOrCustomer # <--- PASTIKAN BARIS INI ADA DAN NAMA KELASNYA SESUAI
 )
 
 class UserViewSet(viewsets.ReadOnlyModelViewSet):
@@ -180,62 +184,119 @@ class RentalOrderViewSet(viewsets.ModelViewSet):
     """
     API endpoint for rental orders.
     """
-    queryset = RentalOrder.objects.all().select_related('user').prefetch_related('items', 'items__product', 'items__product__product_images', 'items__product__shop').order_by('-created_at')
+    queryset = RentalOrder.objects.all().select_related('user').prefetch_related(
+        'items', 'items__product', 'items__product__product_images', 'items__product__shop'
+    ).order_by('-created_at')
     serializer_class = RentalOrderSerializer
 
     def get_permissions(self):
-        if self.action in ['retrieve', 'update', 'partial_update', 'destroy', 'cancel_order']:
-            return [permissions.IsAuthenticated(), IsOrderOwner()]
+        # Untuk melihat detail, update, atau menghapus order:
+        # - Customer bisa melakukan pada order miliknya.
+        # - Shop owner bisa melakukan pada order yang berisi produk tokonya.
+        if self.action in ['retrieve', 'update', 'partial_update', 'destroy']:
+            return [permissions.IsAuthenticated(), IsShopOwnerOfOrderOrCustomer()]
+        # Untuk membuat order, hanya perlu terautentikasi.
         elif self.action == 'create':
             return [permissions.IsAuthenticated()]
+        # Untuk melihat daftar order, hanya perlu terautentikasi (filtering di get_queryset).
         elif self.action == 'list':
-            return [permissions.IsAuthenticated()] # Filter di get_queryset
-        return [permissions.IsAuthenticated()] # Default permission
+            return [permissions.IsAuthenticated()]
+        # Untuk cancel order, hanya customer pemilik order yang boleh.
+        elif self.action == 'cancel_order':
+            return [permissions.IsAuthenticated(), IsOrderOwner()]
+        # Default permission jika ada action lain.
+        return [permissions.IsAuthenticated()]
 
     def get_queryset(self):
         user = self.request.user
-        queryset = super().get_queryset() # Menggunakan queryset yang sudah didefinisikan di atas
+        # Mulai dengan queryset dasar yang mengambil semua order
+        # prefetch_related dan select_related sudah ada di queryset kelas
+        base_queryset = super().get_queryset() 
 
         if not user.is_authenticated:
-            return queryset.none()
+            return base_queryset.none()
 
         if user.is_staff:
+            # Admin bisa melihat semua order atau order milik toko tertentu jika ada shop_id_param
             shop_id_param = self.request.query_params.get('shop_id')
             if shop_id_param:
-                order_ids = OrderItem.objects.filter(product__shop_id=shop_id_param).values_list('order_id', flat=True).distinct()
-                return queryset.filter(id__in=order_ids)
-            return queryset
+                try:
+                    shop_id_val = int(shop_id_param)
+                    # Ambil ID order yang memiliki setidaknya satu item dari toko yang ditentukan
+                    order_ids = OrderItem.objects.filter(product__shop_id=shop_id_val).values_list('order_id', flat=True).distinct()
+                    return base_queryset.filter(id__in=order_ids)
+                except ValueError:
+                    return base_queryset.none() # Atau base_queryset jika ingin admin tetap lihat semua jika param salah
+            return base_queryset # Admin melihat semua jika tidak ada filter toko yang valid
         
+        # Jika ini adalah permintaan untuk detail objek tunggal (misalnya, retrieve, update, cancel_order)
+        # kita bisa sedikit lebih permisif di sini dan membiarkan permission object-level
+        # (IsShopOwnerOfOrderOrCustomer atau IsOrderOwner) melakukan validasi akhir.
+        # Ini karena get_object() akan memanggil get_queryset() lalu memfilter berdasarkan PK,
+        # baru kemudian check_object_permissions().
+        if self.action != 'list': # Untuk retrieve, update, partial_update, destroy, cancel_order
+            # Untuk pemilik toko, kita ingin pastikan dia bisa mengambil order tokonya
+            # meskipun dia bukan `order.user`.
+            # Untuk customer, dia juga bisa mengambil ordernya sendiri.
+            # Kita bisa saja mengembalikan base_queryset di sini dan membiarkan
+            # IsShopOwnerOfOrderOrCustomer yang melakukan semua pekerjaan.
+            # Atau, kita bisa melakukan pra-filter yang lebih luas.
+            # Untuk saat ini, kita coba kembalikan base_queryset dan biarkan permission yang bekerja.
+            # Namun, ini bisa berisiko jika permission tidak ketat.
+            # Alternatif yang lebih aman:
+            if hasattr(user, 'shop') and user.shop:
+                # Jika pengguna adalah pemilik toko, kembalikan semua order yang MUNGKIN terkait dengannya ATAU dibuat olehnya
+                shop_order_ids = OrderItem.objects.filter(product__shop=user.shop).values_list('order_id', flat=True).distinct()
+                # Gabungkan order milik user dan order yang terkait dengan tokonya
+                return base_queryset.filter(
+                    models.Q(user=user) | models.Q(id__in=shop_order_ids)
+                ).distinct()
+            else:
+                # Jika bukan pemilik toko, hanya order miliknya
+                return base_queryset.filter(user=user)
+
+        # Untuk action 'list':
+        # Pengguna biasa (bukan staff) HANYA melihat order miliknya sendiri
+        # ATAU jika dia adalah pemilik toko, dia melihat order tokonya (jika ada shop_id_param)
         shop_id_param = self.request.query_params.get('shop_id')
-        if shop_id_param:
+        if shop_id_param: # Biasanya untuk ShopDashboardPage menampilkan order tokonya
             if hasattr(user, 'shop') and user.shop and str(user.shop.id) == str(shop_id_param):
                 order_ids = OrderItem.objects.filter(product__shop_id=user.shop.id).values_list('order_id', flat=True).distinct()
-                return queryset.filter(id__in=order_ids)
+                return base_queryset.filter(id__in=order_ids)
             else:
-                return queryset.none()
-        else:
-            return queryset.filter(user=user) # User biasa hanya lihat ordernya
-
+                # Jika user (bukan admin) meminta daftar order toko lain
+                return base_queryset.none()
+        else: # Tidak ada shop_id_param, berarti user biasa ingin lihat daftar ordernya sendiri
+            return base_queryset.filter(user=user)
+    
     def perform_create(self, serializer):
+        # Customer yang membuat order adalah user yang sedang login
         serializer.save(user=self.request.user)
 
-    @action(detail=True, methods=['post'], url_path='cancel-order', permission_classes=[permissions.IsAuthenticated, IsOrderOwner])
+    @action(detail=True, methods=['post'], url_path='cancel-order') # Permission sudah diatur di get_permissions
     def cancel_order(self, request, pk=None):
-        order = self.get_object()
-        if order.status not in ['pending', 'confirmed']:
+        order = self.get_object() # get_object akan menjalankan permission check (IsOrderOwner)
+        
+        # Validasi status tambahan di dalam action (best practice)
+        if order.status not in ['pending', 'confirmed', 'pending_whatsapp']: # pending_whatsapp ditambahkan
             return Response(
-                {'detail': f'Order with status "{order.status}" cannot be cancelled.'},
+                {'detail': f'Order with status "{order.status}" cannot be cancelled by the customer.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        
+        # Logika pembatalan
         order.status = 'cancelled'
         for item in order.items.all():
-             product = item.product
-             if not product.available:
-                 product.available = True
-                 product.save()
+            product = item.product
+            if not product.available: # Jika produk jadi tidak available karena order ini
+                product.available = True # Kembalikan jadi available
+                product.save()
         order.save()
         return Response(RentalOrderSerializer(order, context={'request': request}).data)
 
+    # Metode perform_update dan perform_partial_update tidak perlu di-override secara eksplisit
+    # jika permission IsShopOwnerOfOrderOrCustomer sudah menangani hak akses dengan benar
+    # dan serializer RentalOrderSerializer sudah bisa menghandle update field 'status'.
 # ----------------------------------------------------
 # VIEWS BARU UNTUK KERANJANG (CART)
 # ----------------------------------------------------

@@ -119,12 +119,13 @@ class RentalOrder(models.Model):
     total_price = models.DecimalField(max_digits=10, decimal_places=2)
     STATUS_CHOICES = [
         ('pending', 'Pending'),
+        ('pending_whatsapp', 'Pending WhatsApp'), # <-- TAMBAHKAN INI
         ('confirmed', 'Confirmed'), # Pembayaran dikonfirmasi, barang siap diambil/dikirim
         ('active', 'Active'),       # Barang sedang disewa
         ('completed', 'Completed'), # Barang sudah dikembalikan
         ('cancelled', 'Cancelled'),
     ]
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending_whatsapp')
     # Informasi tambahan yang mungkin Anda perlukan dari formData di CheckoutPage
     first_name = models.CharField(max_length=100, blank=True)
     last_name = models.CharField(max_length=100, blank=True)
