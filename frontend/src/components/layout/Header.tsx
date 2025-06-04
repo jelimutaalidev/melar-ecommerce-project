@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Search, ShoppingCart, User, Menu, X, Store, LogOut } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useCart } from '../../context/CartContext';
-import mascotLogo from '../../../dist/assets/maskot.png';
+import mascotLogo from '../../../public/maskot.png';
 
 
 const Header: React.FC = () => {

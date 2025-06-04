@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Mail, Lock, Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import mascotLogo from '../../dist/assets/maskot.png'
+import mascotLogo from '../../public/maskot.png';
 
 const LoginPage: React.FC = () => {
   const [formData, setFormData] = useState({
