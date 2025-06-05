@@ -6,6 +6,9 @@ from .models import (
 )
 from django.contrib.auth.models import User
 from dj_rest_auth.registration.serializers import RegisterSerializer as DefaultRegisterSerializer
+import logging # Import logging
+
+logger = logging.getLogger(__name__) # Buat instance logger
 
 class CustomRegisterSerializer(DefaultRegisterSerializer):
     first_name = serializers.CharField(required=False, max_length=30, allow_blank=True)
@@ -22,15 +25,13 @@ class UserSerializer(serializers.ModelSerializer):
         fields = ['id', 'username', 'email', 'first_name', 'last_name']
 
 class UserProfileSerializer(serializers.ModelSerializer):
-    user = UserSerializer(read_only=True) # Ini akan serialize objek User terkait
-    # has_shop dan shop_id adalah properties pada model UserProfile
-    # DRF akan mengambilnya jika disebutkan di Meta.fields
+    user = UserSerializer(read_only=True)
     has_shop = serializers.BooleanField(read_only=True)
     shop_id = serializers.IntegerField(read_only=True, allow_null=True)
 
     class Meta:
-        model = UserProfile # <-- PERBAIKAN: Model harus UserProfile
-        fields = ['id', 'user', 'has_shop', 'shop_id'] # <-- PERBAIKAN: Sertakan field dari UserProfile
+        model = UserProfile
+        fields = ['id', 'user', 'has_shop', 'shop_id']
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -46,12 +47,27 @@ class ProductImageSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         representation = super().to_representation(instance)
         request = self.context.get('request')
-        if instance.image and request:
-            representation['image'] = request.build_absolute_uri(instance.image.url)
+        
+        if instance.image:
+            image_url = None
+            if hasattr(instance.image, 'url'): 
+                image_url = instance.image.url
+            elif isinstance(instance.image, str): # Jika sudah string URL
+                image_url = instance.image
+            
+            if image_url and request:
+                representation['image'] = request.build_absolute_uri(image_url)
+            elif image_url: # Fallback jika request tidak ada di context
+                representation['image'] = image_url
+            else:
+                representation['image'] = None # Kasus jika instance.image ada tapi tidak punya URL dan bukan string
+        else:
+            representation['image'] = None
         return representation
 
+
 class ShopSerializer(serializers.ModelSerializer):
-    owner_id = serializers.IntegerField(write_only=True, source='owner.id', required=False)
+    owner_id = serializers.IntegerField(write_only=True, required=False)
     owner_username = serializers.CharField(source='owner.username', read_only=True)
     categories = CategorySerializer(many=True, read_only=True)
     category_ids = serializers.PrimaryKeyRelatedField(
@@ -66,55 +82,181 @@ class ShopSerializer(serializers.ModelSerializer):
             'total_rentals', 'image', 'categories', 'category_ids', 'phone_number',
             'address', 'zip_code', 'business_type', 'product_count', 'created_at', 'updated_at'
         ]
-        read_only_fields = ('rating', 'total_rentals', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'owner_username', 'rating', 'total_rentals', 'categories', 'product_count', 'created_at', 'updated_at')
+
+    def create(self, validated_data):
+        owner_id_val = validated_data.pop('owner_id', None)
+        category_data = validated_data.pop('categories', []) 
+
+        if owner_id_val:
+            try:
+                user_instance = User.objects.get(pk=owner_id_val)
+                validated_data['owner'] = user_instance
+            except User.DoesNotExist:
+                raise serializers.ValidationError({'owner_id': f"User with id {owner_id_val} does not exist."})
+        else:
+            request = self.context.get('request')
+            if request and hasattr(request, 'user') and request.user.is_authenticated:
+                validated_data['owner'] = request.user
+            else:
+                # Jika owner_id tidak ada dan user tidak terautentikasi (misalnya dari admin)
+                # Anda mungkin perlu logika berbeda atau raise error jika owner wajib
+                if not validated_data.get('owner'): # Pastikan owner belum di-set
+                    raise serializers.ValidationError({'owner_id': "Shop owner is required."})
+
+
+        shop = Shop.objects.create(**validated_data)
+        if category_data: 
+            shop.categories.set(category_data)
+        return shop
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
         request = self.context.get('request')
-        if instance.image and request:
+        if instance.image and hasattr(instance.image, 'url') and request:
             representation['image'] = request.build_absolute_uri(instance.image.url)
+        elif instance.image: 
+             representation['image'] = str(instance.image)
         return representation
 
 class AppProductSerializer(serializers.ModelSerializer):
-    shop_id = serializers.IntegerField(write_only=True, source='shop.id', required=False)
+    shop_id = serializers.IntegerField(write_only=True, required=True)
+    category_id = serializers.IntegerField(write_only=True, required=True)
+
+    # Field ini ada untuk DRF mengenali bahwa 'images' bisa jadi bagian dari data,
+    # namun kita akan mengambilnya secara manual dari request.FILES di method 'create'.
+    # Ini juga membantu untuk validasi dasar jika DRF memprosesnya.
+    images_from_form = serializers.ListField( 
+        child=serializers.ImageField(allow_empty_file=False, use_url=False),
+        write_only=True,
+        required=False, # Gambar tidak wajib
+        max_length=5,
+        label="Upload images (up to 5)" # Label untuk browsable API
+        # Tidak menggunakan 'source' agar tidak ada konflik saat kita ambil manual dari request.FILES['images']
+    )
+
+    images = serializers.SerializerMethodField(read_only=True) 
     shop_name = serializers.CharField(source='shop.name', read_only=True)
     category_name = serializers.CharField(source='category.name', read_only=True, allow_null=True)
-    category_id = serializers.PrimaryKeyRelatedField(
-        queryset=Category.objects.all(), source='category', write_only=True, required=False, allow_null=True
-    )
-    images = serializers.SerializerMethodField(read_only=True)
     owner_info = serializers.SerializerMethodField(read_only=True) 
 
     class Meta:
         model = AppProduct
         fields = [
-            'id', 'shop_id', 'shop_name', 'name', 'description', 'price', 
-            'category_id', 'category_name', 'rating', 'available', 
-            'total_individual_rentals', 'images', 'owner_info', 
-            'created_at', 'updated_at'
+            'id', 
+            'shop_id',      
+            'shop_name',    
+            'name', 
+            'description', 
+            'price', 
+            'category_id',  
+            'category_name',
+            'rating', 
+            'available', 
+            'total_individual_rentals', 
+            'images',       
+            'images_from_form', # Nama field input gambar di serializer
+            'owner_info', 
+            'created_at', 
+            'updated_at'
         ]
-        read_only_fields = ('rating', 'total_individual_rentals', 'created_at', 'updated_at')
+        read_only_fields = (
+            'id', 'shop_name', 'category_name', 'images', 'owner_info', 
+            'rating', 'total_individual_rentals', 'created_at', 'updated_at'
+        )
 
     def get_images(self, instance):
         request = self.context.get('request')
-        if instance.product_images.exists() and request:
-            return [request.build_absolute_uri(img.image.url) for img in instance.product_images.all().order_by('order')]
+        logger.debug(f"[AppProductSerializer DEBUG] get_images called for product ID: {instance.id}")
+        image_instances = instance.product_images.all().order_by('order')
+        logger.debug(f"[AppProductSerializer DEBUG] Found image_instances in get_images: {list(image_instances)}")
+        if image_instances.exists() and request:
+            serialized_images = ProductImageSerializer(image_instances, many=True, context={'request': request}).data
+            logger.debug(f"[AppProductSerializer DEBUG] Serialized images for output in get_images: {serialized_images}")
+            return serialized_images
+        logger.debug("[AppProductSerializer DEBUG] No image instances or no request in context for get_images.")
         return []
 
     def get_owner_info(self, obj):
-        return {
-            'id': str(obj.shop.id), 
-            'name': obj.shop.name
-        }
+        if obj.shop: 
+            return {
+                'id': str(obj.shop.id), 
+                'name': obj.shop.name
+            }
+        return None
     
+    def create(self, validated_data):
+        request = self.context.get('request')
+        logger.debug(f"[AppProductSerializer DEBUG] Entering create method.")
+        logger.debug(f"[AppProductSerializer DEBUG] Initial validated_data keys: {list(validated_data.keys())}")
+        logger.debug(f"[AppProductSerializer DEBUG] request.data keys: {list(request.data.keys()) if request else 'No request in context'}")
+        logger.debug(f"[AppProductSerializer DEBUG] request.FILES keys: {list(request.FILES.keys()) if request else 'No request in context'}")
+        
+        # PERUBAHAN UTAMA: Ambil berkas langsung dari request.FILES
+        image_files = []
+        if request and hasattr(request, 'FILES'):
+            image_files = request.FILES.getlist('images') # 'images' adalah kunci dari FormData frontend
+            logger.info(f"[AppProductSerializer INFO] Files retrieved from request.FILES.getlist('images'): {len(image_files)} files.")
+            for i, img_file in enumerate(image_files):
+                logger.debug(f"[AppProductSerializer DEBUG] File {i} from request.FILES: Name - {getattr(img_file, 'name', 'N/A')}, Size - {getattr(img_file, 'size', 'N/A')}")
+        else:
+            logger.warning("[AppProductSerializer WARNING] No request object or no FILES attribute in request context found.")
+
+        # Hapus field input gambar dari validated_data agar tidak menyebabkan error saat create AppProduct
+        # karena field ini bukan field asli model AppProduct.
+        validated_data.pop('images_from_form', None) 
+        
+        shop_id_val = validated_data.pop('shop_id')
+        category_id_val = validated_data.pop('category_id')
+        logger.debug(f"[AppProductSerializer DEBUG] Popped shop_id: {shop_id_val}, category_id: {category_id_val}")
+
+        try:
+            shop_instance = Shop.objects.get(pk=shop_id_val)
+            logger.debug(f"[AppProductSerializer DEBUG] Fetched shop_instance: {shop_instance}")
+        except Shop.DoesNotExist:
+            logger.error(f"[AppProductSerializer ERROR] Shop with id {shop_id_val} does not exist.")
+            raise serializers.ValidationError({'shop_id': f"Shop with id {shop_id_val} does not exist."})
+        
+        try:
+            category_instance = Category.objects.get(pk=category_id_val)
+            logger.debug(f"[AppProductSerializer DEBUG] Fetched category_instance: {category_instance}")
+        except Category.DoesNotExist:
+            logger.error(f"[AppProductSerializer ERROR] Category with id {category_id_val} does not exist.")
+            raise serializers.ValidationError({'category_id': f"Category with id {category_id_val} does not exist."})
+
+        validated_data['shop'] = shop_instance
+        validated_data['category'] = category_instance
+        logger.debug(f"[AppProductSerializer DEBUG] Validated_data before AppProduct.objects.create: {validated_data}")
+        
+        product = AppProduct.objects.create(**validated_data)
+        logger.info(f"[AppProductSerializer INFO] Product created with ID: {product.id}")
+
+        if not image_files: 
+            logger.warning(f"[AppProductSerializer WARNING] No image files were retrieved from request.FILES to create ProductImage for product {product.id}.")
+        
+        for i, image_file_data in enumerate(image_files): 
+            try:
+                logger.debug(f"[AppProductSerializer DEBUG] Attempting to create ProductImage {i+1} for product {product.id} with file: {getattr(image_file_data, 'name', 'N/A')}")
+                pi = ProductImage.objects.create(product=product, image=image_file_data) 
+                logger.info(f"[AppProductSerializer INFO] ProductImage {i+1} created with ID: {pi.id}. Image URL (from CloudinaryField): {pi.image.url if pi.image and hasattr(pi.image, 'url') else 'No image URL/object'}")
+            except Exception as e:
+                logger.error(f"[AppProductSerializer CRITICAL] Error creating ProductImage {i+1} for product {product.id}: {e}", exc_info=True)
+        
+        created_images_count = product.product_images.count()
+        logger.info(f"[AppProductSerializer INFO] Total ProductImages successfully linked to product {product.id}: {created_images_count}")
+        
+        return product
+
     def to_representation(self, instance):
         representation = super().to_representation(instance)
         if instance.category:
             representation['category_name'] = instance.category.name 
         else:
             representation['category_name'] = None 
-        if 'category' in representation and isinstance(representation['category'], int): 
-            del representation['category'] 
+        
+        representation.pop('images_from_form', None) 
+        representation.pop('shop_id', None) 
+        representation.pop('category_id', None) 
         return representation
 
 class ProductReviewSerializer(serializers.ModelSerializer):
@@ -146,21 +288,19 @@ class ProductInfoForOrderItemSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         first_image_instance = obj.product_images.order_by('order').first()
         if request and first_image_instance and first_image_instance.image:
-            return request.build_absolute_uri(first_image_instance.image.url)
+            if hasattr(first_image_instance.image, 'url'):
+                return request.build_absolute_uri(first_image_instance.image.url)
+            return str(first_image_instance.image)
         return None
 
 class OrderItemSerializer(serializers.ModelSerializer):
     product = ProductInfoForOrderItemSerializer(read_only=True)
-    product_name = serializers.CharField(source='product.name', read_only=True)
-    product_image = serializers.SerializerMethodField(read_only=True) 
 
     class Meta:
         model = OrderItem
         fields = [
             'id', 
             'product', 
-            'product_name', 
-            'product_image', 
             'quantity', 
             'price_per_day_at_rental', 
             'start_date', 
@@ -168,30 +308,6 @@ class OrderItemSerializer(serializers.ModelSerializer):
             'item_total'
         ]
         read_only_fields = ('item_total',) 
-
-    def get_product_image(self, obj): 
-        if obj.product and hasattr(obj.product, 'main_image'):
-            if isinstance(obj.product, dict) and obj.product.get('main_image'): 
-                return obj.product.get('main_image')
-
-        request = self.context.get('request')
-        # Memastikan obj.product adalah instance AppProduct atau memiliki ID yang bisa digunakan untuk query
-        product_id_to_fetch = None
-        if hasattr(obj.product, 'id') and not isinstance(obj.product, int): # Jika obj.product adalah objek/dict dengan 'id'
-             product_id_to_fetch = obj.product.id
-        elif isinstance(obj.product, int): # Jika obj.product adalah integer (ID)
-             product_id_to_fetch = obj.product
-        
-        if product_id_to_fetch:
-            try:
-                app_product_instance = AppProduct.objects.get(id=product_id_to_fetch)
-                first_image_model_instance = app_product_instance.product_images.order_by('order').first()
-                if request and first_image_model_instance and first_image_model_instance.image:
-                        return request.build_absolute_uri(first_image_model_instance.image.url)
-            except AppProduct.DoesNotExist:
-                return None # Atau gambar placeholder
-        return None
-
 
 class RentalOrderSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
@@ -270,7 +386,9 @@ class ProductInfoForCartSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         first_image = obj.product_images.order_by('order').first()
         if request and first_image and first_image.image:
-            return request.build_absolute_uri(first_image.image.url)
+            if hasattr(first_image.image, 'url'):
+                return request.build_absolute_uri(first_image.image.url)
+            return str(first_image.image)
         return None
 
 class CartItemSerializer(serializers.ModelSerializer):
@@ -295,9 +413,9 @@ class CartItemSerializer(serializers.ModelSerializer):
         if start_date and end_date:
             if end_date < start_date:
                 raise serializers.ValidationError({"non_field_errors": "End date cannot be before start date."}) 
-        elif 'start_date' in data and not data.get('start_date'):
+        elif 'start_date' in data and not data.get('start_date') and not self.instance:
              raise serializers.ValidationError({"start_date": "Start date is required."})
-        elif 'end_date' in data and not data.get('end_date'):
+        elif 'end_date' in data and not data.get('end_date') and not self.instance:
              raise serializers.ValidationError({"end_date": "End date is required."})
         return data
 
