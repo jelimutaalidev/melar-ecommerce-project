@@ -1,19 +1,10 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { Star } from 'lucide-react';
-
-interface Product {
-  id: string;
-  name: string;
-  price: number;
-  images: string[];
-  rating: number;
-  available: boolean;
-  category: string;
-}
+import { AppProduct } from '../../types'
 
 interface ProductCardProps {
-  product: Product;
+  product: AppProduct;
 }
 
 const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
@@ -21,11 +12,11 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
     <Link to={`/products/${product.id}`} className="group">
       <div className="bg-white rounded-lg shadow-sm overflow-hidden transition-shadow hover:shadow-md">
         <div className="relative h-48 sm:h-56 overflow-hidden bg-gray-200">
-          <img 
-            src={product.images[0]} 
-            alt={product.name} 
-            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-          />
+        <img 
+          src={(product.images && product.images.length > 0 && product.images[0].image) ? product.images[0].image : 'https://via.placeholder.com/150.png?text=No+Image'} 
+          alt={product.name} 
+          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+        />
           {!product.available && (
             <div className="absolute top-0 right-0 m-2 px-2 py-1 bg-red-500 text-white text-xs rounded-md">
               Unavailable

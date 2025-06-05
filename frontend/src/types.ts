@@ -49,12 +49,20 @@ export interface ProductReview {
   id?: string | number;
 }
 
+// Tambahkan interface ini di frontend/src/types.ts
+export interface ProductImage {
+  id: number | string;
+  image: string;
+  alt_text?: string;
+  order?: number;
+}
+
 export interface AppProduct {
   id: string;
   name: string;
   description: string;
   price: number;
-  images: string[];
+  images: ProductImage[]; // <--- UBAH MENJADI INI
   category: string;
   category_name?: string;
   rating: number;
