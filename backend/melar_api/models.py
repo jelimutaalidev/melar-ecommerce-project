@@ -2,6 +2,7 @@ from django.db import models
 from django.contrib.auth.models import User
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+from cloudinary.models import CloudinaryField # Impor CloudinaryField
 # import uuid # Aktifkan jika Anda memutuskan untuk menggunakan UUID untuk ID kustom
 
 # Model untuk Profil Pengguna Tambahan
@@ -43,7 +44,8 @@ def save_user_profile(sender, instance, **kwargs):
 class Category(models.Model):
     name = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True, null=True)
-    # image = models.ImageField(upload_to='category_images/', null=True, blank=True) # Opsional
+    # Jika ingin menggunakan gambar untuk kategori:
+    # image = CloudinaryField('category_image', folder='melar/category_images', null=True, blank=True) # Opsional
 
     class Meta:
         verbose_name_plural = "Categories" # Perbaikan untuk penamaan jamak di admin
@@ -60,7 +62,8 @@ class Shop(models.Model):
     location = models.CharField(max_length=255) # Misal: "Jakarta Selatan, ID"
     rating = models.FloatField(default=0.0)
     total_rentals = models.IntegerField(default=0)
-    image = models.ImageField(upload_to='shop_images/', null=True, blank=True)
+    # Diubah ke CloudinaryField
+    image = CloudinaryField('foto_shop', folder='melar/shop_images', null=True, blank=True)
     categories = models.ManyToManyField(Category, related_name='shops_in_category', blank=True)
     phone_number = models.CharField(max_length=20, blank=True, null=True)
     address = models.CharField(max_length=255, blank=True, null=True)
@@ -92,7 +95,8 @@ class AppProduct(models.Model):
 # Model untuk Gambar Produk
 class ProductImage(models.Model):
     product = models.ForeignKey(AppProduct, related_name='product_images', on_delete=models.CASCADE)
-    image = models.ImageField(upload_to='product_images/')
+    # Diubah ke CloudinaryField
+    image = CloudinaryField('foto_produk', folder='melar/produk_images', null=True, blank=True)
     alt_text = models.CharField(max_length=255, blank=True, null=True)
     order = models.PositiveIntegerField(default=0, help_text="Urutan gambar, gambar utama biasanya 0")
 
@@ -126,16 +130,14 @@ class RentalOrder(models.Model):
         ('cancelled', 'Cancelled'),
     ]
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending_whatsapp')
-    # Informasi tambahan yang mungkin Anda perlukan dari formData di CheckoutPage
     first_name = models.CharField(max_length=100, blank=True)
     last_name = models.CharField(max_length=100, blank=True)
-    email_at_checkout = models.EmailField(blank=True) # Email bisa berubah, jadi simpan saat checkout
+    email_at_checkout = models.EmailField(blank=True) 
     phone_at_checkout = models.CharField(max_length=20, blank=True)
     billing_address = models.TextField(blank=True)
     billing_city = models.CharField(max_length=100, blank=True)
     billing_state = models.CharField(max_length=100, blank=True)
     billing_zip = models.CharField(max_length=10, blank=True)
-    # Anda mungkin ingin menyimpan referensi pembayaran atau detail lainnya
     payment_reference = models.CharField(max_length=255, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -146,18 +148,15 @@ class RentalOrder(models.Model):
 # Model untuk Item dalam Pesanan Rental (OrderItem)
 class OrderItem(models.Model):
     order = models.ForeignKey(RentalOrder, related_name='items', on_delete=models.CASCADE)
-    product = models.ForeignKey(AppProduct, on_delete=models.PROTECT) # PROTECT agar produk tidak bisa dihapus jika masih ada di order
+    product = models.ForeignKey(AppProduct, on_delete=models.PROTECT) 
     quantity = models.PositiveIntegerField(default=1)
     price_per_day_at_rental = models.DecimalField(max_digits=10, decimal_places=2)
     start_date = models.DateField()
     end_date = models.DateField()
-    # item_total_price bisa dihitung, atau disimpan jika ada diskon khusus per item
-    # item_total_price = models.DecimalField(max_digits=10, decimal_places=2)
 
     def __str__(self):
         return f"{self.quantity} x {self.product.name} in Order {self.order.id}"
 
-    # Anda bisa menambahkan property untuk menghitung total harga item ini
     @property
     def rental_duration_days(self):
         if self.start_date and self.end_date:
@@ -173,10 +172,6 @@ class OrderItem(models.Model):
 # ---------------------------------------------
 
 class Cart(models.Model):
-    """
-    Model untuk menyimpan keranjang belanja pengguna.
-    Satu pengguna memiliki satu keranjang.
-    """
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='cart')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -184,26 +179,15 @@ class Cart(models.Model):
     def __str__(self):
         return f"Cart for {self.user.username}"
 
-    # Anda bisa menambahkan property untuk total harga keranjang di sini jika diinginkan,
-    # namun seringkali ini dihitung di serializer atau view.
-    # @property
-    # def total_cart_price(self):
-    #     return sum(item.subtotal for item in self.items.all())
-
 class CartItem(models.Model):
-    """
-    Model untuk menyimpan item-item yang ada di dalam keranjang belanja.
-    """
     cart = models.ForeignKey(Cart, related_name='items', on_delete=models.CASCADE)
     product = models.ForeignKey(AppProduct, on_delete=models.CASCADE)
     quantity = models.PositiveIntegerField(default=1)
     start_date = models.DateField()
     end_date = models.DateField()
-    added_at = models.DateTimeField(auto_now_add=True) # Waktu item ditambahkan/diupdate
+    added_at = models.DateTimeField(auto_now_add=True) 
 
     class Meta:
-        # Mencegah duplikasi item yang sama dengan periode sewa yang sama dalam satu keranjang
-        # Anda bisa menyesuaikan ini jika ingin item yang sama dengan periode sewa sama digabung kuantitasnya
         unique_together = ('cart', 'product', 'start_date', 'end_date')
         ordering = ['-added_at']
 
@@ -211,16 +195,12 @@ class CartItem(models.Model):
         return f"{self.quantity} x {self.product.name} (for {self.cart.user.username})"
 
     @property
-    def rental_duration_days_cart(self): # Memberi nama berbeda agar tidak konflik jika ada property serupa
+    def rental_duration_days_cart(self): 
         if self.start_date and self.end_date:
             duration = (self.end_date - self.start_date).days + 1
-            return max(1, duration) # Minimal 1 hari
+            return max(1, duration) 
         return 0
 
     @property
     def subtotal(self):
-        """
-        Menghitung subtotal untuk item keranjang ini berdasarkan harga produk saat ini.
-        Harga bisa dikunci saat checkout menjadi 'price_per_day_at_rental' di OrderItem.
-        """
         return self.product.price * self.rental_duration_days_cart * self.quantity

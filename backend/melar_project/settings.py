@@ -4,13 +4,17 @@ Django settings for melar_project project.
 
 from pathlib import Path
 import os
+import cloudinary
+import cloudinary.uploader
+import cloudinary.api
+import cloudinary_storage
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-cp_aw9zwun$b#1&#8wsr3(@d%_6+=78jthyyi_&=l5q9%o&!c3')
 DEBUG = os.environ.get('DJANGO_DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['melarfix-production.up.railway.app', '127.0.0.1', 'localhost', 'api.melar.my.id', 'www.melar.my.id', 'melar-ecommerce-project.vercel.app']
 # if not DEBUG:
 #     ALLOWED_HOSTS = ['www.yourdomain.com', 'api.yourdomain.com']
 
@@ -29,7 +33,10 @@ INSTALLED_APPS = [
     'allauth',
     'allauth.account',
     'allauth.socialaccount',
-    'corsheaders', # Tambahkan ini'
+    'corsheaders',
+    'cloudinary',
+    'cloudinary_storage',
+
 
     'melar_api.apps.MelarApiConfig',
 ]
@@ -47,6 +54,16 @@ MIDDLEWARE = [
 ]
 
 ROOT_URLCONF = 'melar_project.urls'
+
+cloudinary.config( 
+  cloud_name = "dhno53cce", 
+  api_key = "897278998612425", 
+  api_secret = "h9-6L51APFnvHzqwHUrnZB0Xv_E",
+  secure = True
+)
+
+DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
+
 
 TEMPLATES = [
     {
@@ -85,7 +102,9 @@ TIME_ZONE = 'Asia/Jakarta'
 USE_I18N = True
 USE_TZ = True
 
-STATIC_URL = '/static/'
+STATIC_URL = 'static/'
+STATICFILES_DIRS = [os.path.join(BASE_DIR, "static")]
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
@@ -184,7 +203,17 @@ else:
     
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173", # Ganti dengan port frontend Anda jika berbeda
-    "http://127.0.0.1:5173",
+    "http://127.0.0.1:8000",
+    "https://melar-ecommerce-project.vercel.app",
+    "https://www.melar.my.id",
+    "https://melarfix-production.up.railway.app",
+]
+
+CSRF_TRUSTED_ORIGINS = [
+    'https://melarfix-production.up.railway.app',
+    'https://www.melar.my.id',
+    'https://melar.my.id',
+    "https://melar-ecommerce-project.vercel.app",
 ]
 # Jika Anda ingin mengizinkan semua origin (tidak disarankan untuk produksi):
 # CORS_ALLOW_ALL_ORIGINS = True
@@ -194,3 +223,9 @@ CORS_ALLOW_CREDENTIALS = True
 
 # Anda mungkin juga perlu mengatur header yang diizinkan jika frontend mengirim header kustom
 # CORS_ALLOW_HEADERS = list(default_headers) + ['my-custom-header']
+
+from allauth.account import app_settings as allauth_account_settings
+
+# Patch sementara untuk backward compatibility dengan dj-rest-auth
+allauth_account_settings.USERNAME_REQUIRED = True
+allauth_account_settings.EMAIL_REQUIRED = True
