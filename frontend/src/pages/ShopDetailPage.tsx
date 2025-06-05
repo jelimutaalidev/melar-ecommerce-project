@@ -47,7 +47,7 @@ const ShopDetailPage: React.FC = () => {
                   } as CategoryType)) 
                 : [],
             ownerId: String(fetchedShopData.owner_id || fetchedShopData.owner?.id || ''), // Sesuaikan dengan field owner dari API
-            phoneNumber: fetchedShopData.phone_number,
+            phone_number: fetchedShopData.phone_number,
             address: fetchedShopData.address,
             zip_code: fetchedShopData.zip_code,
             business_type: fetchedShopData.business_type,
