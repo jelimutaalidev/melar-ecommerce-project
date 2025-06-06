@@ -256,7 +256,7 @@ const ProductDetailPage: React.FC = () => {
             <div>
               <div className="relative rounded-lg overflow-hidden h-80 sm:h-96 bg-gray-100 border border-gray-200">
                 <img
-                  src={product.images?.[activeImage] || 'https://via.placeholder.com/600x400.png?text=No+Image'}
+                  src={product.images?.[activeImage]?.image || 'https://via.placeholder.com/600x400.png?text=No+Image'} // <-- PERUBAHAN DI SINI
                   alt={product.name}
                   className="w-full h-full object-contain transition-transform duration-300 ease-in-out group-hover:scale-105"
                 />
@@ -281,7 +281,7 @@ const ProductDetailPage: React.FC = () => {
               </div>
               {(product.images?.length || 0) > 1 && (
                 <div className="flex gap-2 mt-4 overflow-x-auto py-2">
-                  {product.images.map((image, index) => (
+                  {product.images.map((image, index) => ( // 'image' di sini adalah objek { id, image, ... }
                     <button
                       key={index}
                       onClick={() => setActiveImage(index)}
@@ -291,7 +291,7 @@ const ProductDetailPage: React.FC = () => {
                       aria-label={`View image ${index + 1}`}
                     >
                       <img
-                        src={image}
+                        src={image.image} // <-- PERUBAHAN DI SINI
                         alt={`${product.name} thumbnail ${index + 1}`}
                         className="w-full h-full object-cover"
                       />

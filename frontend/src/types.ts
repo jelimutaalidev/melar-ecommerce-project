@@ -45,7 +45,7 @@ export interface ProductReview {
   user: string | { id: string | number; username: string; first_name?: string; last_name?: string; };
   rating: number;
   comment: string;
-  date: string;
+  created_at: string;
   id?: string | number;
 }
 
@@ -53,7 +53,7 @@ export interface ProductReview {
 export interface ProductImage {
   id: number | string;
   image: string;
-  alt_text?: string;
+  alt_text?: string | null;
   order?: number;
 }
 
@@ -73,7 +73,7 @@ export interface AppProduct {
   };
   shopId?: string; // ID Toko, bisa sama dengan owner.id
   shop_name?: string; // Nama Toko
-  reviews?: ProductReview[];
+  reviews: any[];
   status?: 'available' | 'rented' | 'maintenance' | 'archived';
   total_individual_rentals?: number;
 }
