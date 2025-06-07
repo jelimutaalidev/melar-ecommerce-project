@@ -153,7 +153,7 @@ const ShopDashboardPage: React.FC = () => {
               items: Array.isArray(o.items) ? o.items.map((item: any) => ({
                   ...item,
                   productId: String(item.product || item.productId || item.product_id),
-                  name: item.product_name || item.name || (item.product_detail ? item.product_detail.name : 'Unknown Item'),
+                  name: item.product?.name || item.product_name || item.name || 'Unknown Item',
                   pricePerDay: parseFloat(item.price_per_day_at_rental || item.pricePerDay || item.product_detail?.price || 0),
                   quantity: parseInt(item.quantity, 10) || 1,
                   image: item.product_image || item.image || item.product_detail?.main_image || '',
