@@ -247,12 +247,16 @@ Terima kasih!`;
       console.log("[CheckoutPage DEBUG] Final WhatsApp URL created:", whatsappUrl);
 
       window.open(whatsappUrl, '_blank');
-      await clearCart();
-      console.log("[CheckoutPage DEBUG] Cart cleared after successful order and WA redirection.");
+      navigate('/whatsapp-order-sent', { 
+        replace: true, 
+        state: { 
+          orderId: orderIdFromBackend,
+          whatsappUrl: whatsappUrl // URL-nya sekarang ikut dikirim
+        } 
+      });
 
-      setTimeout(() => {
-        navigate('/whatsapp-order-sent', { state: { orderId: orderIdFromBackend } });
-      }, 500);
+      // 2. Bersihkan keranjang setelahnya (tanpa perlu ditunggu)
+      clearCart();
 
     } catch (error: any) {
       console.error("[CheckoutPage DEBUG] Error submitting order to backend or during WA process:", error);

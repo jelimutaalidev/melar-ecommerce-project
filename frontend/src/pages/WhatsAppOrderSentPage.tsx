@@ -1,11 +1,20 @@
 // frontend/src/pages/WhatsAppOrderSentPage.tsx
+
 import React from 'react';
-import { Link } from 'react-router-dom';
-import { CheckCircle, MessageSquare } from 'lucide-react';
+// Impor 'useLocation' untuk bisa membaca data yang dikirim saat navigasi
+import { Link, useLocation } from 'react-router-dom';
+import { CheckCircle, MessageSquare, ArrowLeft } from 'lucide-react';
 
 const WhatsAppOrderSentPage: React.FC = () => {
-  // GANTI DENGAN NOMOR WA ADMIN ANDA YANG SEBENARNYA (format internasional tanpa + atau 0 di depan)
-  const ADMIN_WHATSAPP_NUMBER_FOR_CONFIRMATION = "6281234567890"; 
+  // Gunakan hook useLocation untuk mendapatkan data dari halaman sebelumnya
+  const location = useLocation();
+
+  // Ambil URL WhatsApp LENGKAP dari state navigasi yang dikirim CheckoutPage
+  // URL ini sudah berisi nomor tujuan DAN detail pesanan
+  const whatsappUrl = location.state?.whatsappUrl;
+  
+  // Ambil juga orderId untuk bisa ditampilkan ke pengguna
+  const orderId = location.state?.orderId;
 
   return (
     <div className="bg-gray-50 min-h-screen flex flex-col items-center justify-center py-12 px-4 text-center fade-in">
@@ -16,18 +25,33 @@ const WhatsAppOrderSentPage: React.FC = () => {
         <h1 className="text-2xl md:text-3xl font-bold text-gray-800 mb-4">
           Pesanan Anda Sedang Diproses!
         </h1>
-        <p className="text-gray-600 mb-3">
-          Anda telah diarahkan ke WhatsApp untuk menyelesaikan pesanan Anda dengan admin kami.
-        </p>
+
+        {/* Menampilkan ID Pesanan agar lebih informatif */}
+        {orderId && (
+            <p className="text-sm text-gray-500 mb-4">
+                Ref Pesanan: <strong>{orderId}</strong>
+            </p>
+        )}
+
         <p className="text-gray-600 mb-8">
-          Silakan lanjutkan percakapan di WhatsApp untuk konfirmasi ketersediaan, total biaya, dan detail pembayaran.
+          Silakan lanjutkan percakapan di WhatsApp yang telah terbuka untuk konfirmasi detail pesanan.
         </p>
+
         <div className="flex flex-col sm:flex-row justify-center gap-4">
+          {/* Tombol ini sekarang menggunakan URL lengkap dari state */}
           <a
-            href={`https://wa.me/${ADMIN_WHATSAPP_NUMBER_FOR_CONFIRMATION}`} 
+            href={whatsappUrl || '#'} // Gunakan URL lengkap, atau '#' jika tidak ada
             target="_blank"
             rel="noopener noreferrer"
-            className="btn-primary flex items-center justify-center py-3"
+            // Tombol akan terlihat nonaktif jika URL tidak ada
+            className={`btn-primary flex items-center justify-center py-3 ${!whatsappUrl ? 'opacity-50 cursor-not-allowed' : ''}`}
+            // Mencegah klik jika URL tidak ada
+            onClick={(e) => {
+              if (!whatsappUrl) {
+                e.preventDefault();
+                alert('Detail pesanan tidak ditemukan untuk dibuka di WhatsApp.');
+              }
+            }}
           >
             <MessageSquare size={20} className="mr-2" />
             Buka WhatsApp Lagi
@@ -36,13 +60,22 @@ const WhatsAppOrderSentPage: React.FC = () => {
             to="/products"
             className="btn-secondary flex items-center justify-center py-3"
           >
+            <ArrowLeft size={20} className="mr-2" />
             Lanjut Belanja
           </Link>
         </div>
+
         <p className="text-xs text-gray-500 mt-8">
           Jika Anda tidak otomatis diarahkan ke WhatsApp, klik tombol "Buka WhatsApp Lagi". <br />
           Terima kasih telah memilih Melar!
         </p>
+
+        {/* Menampilkan pesan error jika halaman ini diakses tanpa data whatsappUrl */}
+        {!whatsappUrl && (
+            <p className="text-xs text-red-500 mt-4 font-semibold">
+                Terjadi kesalahan. Tidak dapat membuka detail pesanan di WhatsApp.
+            </p>
+        )}
       </div>
     </div>
   );
