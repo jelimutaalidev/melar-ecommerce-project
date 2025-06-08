@@ -251,32 +251,85 @@ const ShopDashboardPage: React.FC = () => {
   };
 
   const handleDeleteSelected = async () => {
-    if (selectedItems.length === 0 || !user?.shopId) return;
-    setIsSubmitting(true);
-    console.log("[ShopDashboard] Attempting to delete products:", selectedItems);
+  // --- Validasi Awal ---
+  if (selectedItems.length === 0 || !user?.shopId) return;
+
+  // Konfirmasi dari user sebelum melanjutkan
+  const isSingleItem = selectedItems.length === 1;
+  // Perbaikan: Menggunakan 'shopProducts' dan menambahkan tipe untuk 'p'
+  const productName = isSingleItem ? shopProducts.find((p: AppProduct) => p.id === selectedItems[0])?.name || `Produk ID ${selectedItems[0]}` : '';
+  const confirmationMessage = isSingleItem
+    ? `Apakah Anda yakin ingin menghapus "${productName}"?`
+    : `Apakah Anda yakin ingin menghapus ${selectedItems.length} produk yang dipilih?`;
+
+  if (!window.confirm(confirmationMessage)) {
+    return; // Batalkan jika user menekan "Cancel"
+  }
+
+  setIsSubmitting(true);
+
+  // ================================================================
+  // KASUS 1: HANYA SATU PRODUK YANG DIPILIH
+  // ================================================================
+  if (isSingleItem) {
+    const productId = selectedItems[0];
     try {
-      for (const productIdToDelete of selectedItems) {
-        await apiClient.delete(`/products/${productIdToDelete}/`);
-        console.log(`[ShopDashboard] Product ${productIdToDelete} deleted via API.`);
-      }
-      if (user?.shopId && isMountedRef.current) {
-        console.log("[ShopDashboard] Re-fetching products after deletion.");
-        loadDataFromAPI(user.shopId);
-      }
-      setSelectedItems([]);
-      setShowDeleteModal(false);
-      alert(`${selectedItems.length} product(s) deleted successfully.`);
+      await apiClient.delete(`/products/${productId}/`);
+      alert(`Produk "${productName}" berhasil dihapus.`);
     } catch (error: any) {
-      console.error("[ShopDashboard] Error deleting products via API:", error);
-      let errorMessage = "Failed to delete products.";
-       if (error.response && error.response.data) {
-         errorMessage += ` Server says: ${JSON.stringify(error.response.data)}`;
-       }
-      alert(errorMessage);
-    } finally {
-      if (isMountedRef.current) setIsSubmitting(false);
+      console.error(`Gagal menghapus produk "${productName}":`, error);
+      if (error.response && error.response.data && error.response.data.detail) {
+        alert(`Gagal menghapus "${productName}":\n\n${error.response.data.detail}`);
+      } else {
+        alert(`Terjadi kesalahan saat mencoba menghapus "${productName}".`);
+      }
     }
-  };
+
+  // ================================================================
+  // KASUS 2: BEBERAPA PRODUK DIPILIH (LEBIH DARI SATU)
+  // ================================================================
+  } else {
+    const errorMessages = [];
+    let successfulDeletionCount = 0;
+
+    for (const productIdToDelete of selectedItems) {
+      try {
+        await apiClient.delete(`/products/${productIdToDelete}/`);
+        successfulDeletionCount++;
+      } catch (error: any) {
+        // Perbaikan: Menggunakan 'shopProducts' dan menambahkan tipe untuk 'p'
+        const pName = shopProducts.find((p: AppProduct) => p.id === productIdToDelete)?.name || `ID ${productIdToDelete}`;
+        console.error(`[ShopDashboard] Gagal menghapus produk ${pName}:`, error);
+        if (error.response && error.response.data && error.response.data.detail) {
+          errorMessages.push(`- "${pName}": ${error.response.data.detail}`);
+        } else {
+          errorMessages.push(`- Gagal menghapus "${pName}" (kesalahan tak terduga).`);
+        }
+      }
+    }
+
+    let summaryMessage = '';
+    if (successfulDeletionCount > 0) {
+      summaryMessage += `${successfulDeletionCount} produk berhasil dihapus.\n\n`;
+    }
+    if (errorMessages.length > 0) {
+      summaryMessage += "Produk berikut gagal dihapus:\n" + errorMessages.join("\n");
+    }
+    alert(summaryMessage.trim());
+  }
+
+  // ================================================================
+  // CLEANUP & REFRESH (JALANKAN UNTUK KEDUA KASUS)
+  // ================================================================
+  if (isMountedRef.current) {
+    loadDataFromAPI(user.shopId);
+    setSelectedItems([]);
+    // Mengganti setShowDeleteModal(false) dengan baris di bawah agar lebih konsisten
+    // karena modal kemungkinan dibuka dari tombol lain, bukan hanya dari checkbox
+    if(showDeleteModal) setShowDeleteModal(false); 
+    setIsSubmitting(false);
+  }
+};
 
   const filteredProducts = (shopProducts || []).filter(product => {
     if (!product || typeof product.name !== 'string') return false;

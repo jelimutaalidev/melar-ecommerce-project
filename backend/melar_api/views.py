@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.views import APIView # <-- Import APIView
 from django.db import models # <--- PENAMBAHAN IMPORT INI
+from django.db.models import ProtectedError
 
 from .models import (
     UserProfile, Category, Shop, AppProduct,
@@ -145,6 +146,17 @@ class AppProductViewSet(viewsets.ModelViewSet):
         
         print(f"[AppProductViewSet DEBUG] Creating product for shop: {shop.name} (ID: {shop.id}) by user: {self.request.user.username}")
         serializer.save(shop=shop)
+    
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        try:
+            self.perform_destroy(instance)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except ProtectedError:
+            return Response(
+                {"detail": "Produk ini tidak dapat dihapus karena sudah menjadi bagian dari pesanan yang ada."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
 
 class ProductReviewViewSet(viewsets.ModelViewSet):

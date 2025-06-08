@@ -20,6 +20,13 @@ export interface Category {
   description?: string;
 }
 
+export interface HomePageCategoryDisplay {
+  id: string;
+  name: string;
+  count: number;
+  image: string;
+}
+
 export interface Shop {
   id: string;
   name: string;

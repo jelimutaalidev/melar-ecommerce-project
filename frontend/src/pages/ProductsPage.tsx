@@ -41,6 +41,7 @@ const ProductsPage: React.FC = () => {
           rating: parseFloat(p.rating as any) || 0, // Konversi rating juga, beri default 0 jika NaN
           // Pastikan juga untuk mengkonversi properti numerik lainnya jika ada (misalnya total_individual_rentals)
           total_individual_rentals: parseInt(p.total_individual_rentals as any, 10) || 0,
+          category: p.category_name || p.category || 'Uncategorized',
         }));
         setDisplayProducts(validProducts);
         console.log("[ProductsPage DEBUG] Products processed with price/rating as numbers:", validProducts);
