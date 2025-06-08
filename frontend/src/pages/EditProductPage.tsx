@@ -17,6 +17,9 @@ const EditProductPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  
+  // --- PERUBAHAN 1: State untuk melacak ID gambar yang akan dihapus ---
+  const [deletedImageIds, setDeletedImageIds] = useState<string[]>([]);
 
   const fetchProduct = useCallback(async () => {
     if (!productId) {
@@ -29,14 +32,13 @@ const EditProductPage: React.FC = () => {
     setError(null);
 
     try {
-      // PERBAIKAN: Mengubah cara pemanggilan tipe dari generic menjadi type assertion
       const data = await apiClient.get(`/products/${productId}/`) as AppProduct;
       
       const formattedProduct: AppProduct = {
         ...data,
         id: String(data.id),
         price: parseFloat(String(data.price)),
-        images: Array.isArray(data.images) ? data.images : [],
+        images: Array.isArray(data.images) ? data.images.map(img => ({ ...img, id: String(img.id) })) : [], // Pastikan ID gambar adalah string
         category: data.category ? String(data.category) : '',
         owner: data.owner || { id: String(data.shopId), name: String(data.shop_name) }
       };
@@ -59,6 +61,22 @@ const EditProductPage: React.FC = () => {
     fetchProduct();
   }, [fetchProduct]);
 
+  // --- PERUBAHAN 2: Fungsi untuk menangani penghapusan gambar ---
+  // Fungsi ini akan dipassing sebagai prop ke ProductForm
+  const handleDeleteExistingImage = (imageId: string) => {
+    // Tambahkan ID ke daftar yang akan dihapus
+    setDeletedImageIds(prevIds => [...prevIds, imageId]);
+    
+    // Hapus gambar dari state 'product' agar UI langsung terupdate
+    setProduct(prevProduct => {
+        if (!prevProduct) return null;
+        return {
+            ...prevProduct,
+            images: prevProduct.images.filter(image => image.id !== imageId)
+        };
+    });
+  };
+
   const handleEditProduct = async (formData: ProductFormData) => {
     if (!product || !productId) {
       alert('Cannot update product: critical information missing.');
@@ -76,6 +94,12 @@ const EditProductPage: React.FC = () => {
         submissionData.append('category_id', String(formData.category_id));
     }
     
+    // --- PERUBAHAN 3: Mengirim daftar ID gambar yang akan dihapus ke backend ---
+    deletedImageIds.forEach(id => {
+      submissionData.append('images_to_delete', id);
+    });
+
+    // Logika untuk mengirim gambar baru (sudah benar, tidak ada perubahan)
     if (formData.images && formData.images.length > 0) {
       const newImageFiles = formData.images.filter(img => img instanceof File);
       newImageFiles.forEach((file: File) => {
@@ -147,11 +171,13 @@ const EditProductPage: React.FC = () => {
             <Edit3 size={28} className="text-primary-600 mr-3" />
             <h1 className="text-2xl font-bold text-gray-800">Edit Product</h1>
           </div>
+          {/* --- PERUBAHAN 4: Mengirim fungsi 'handleDeleteExistingImage' ke ProductForm --- */}
           <ProductForm
             onSubmit={handleEditProduct}
             initialData={product}
             isSubmitting={isSubmitting}
             submitButtonText="Save Changes"
+            onDeleteExistingImage={handleDeleteExistingImage}
           />
         </div>
       </div>

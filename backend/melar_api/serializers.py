@@ -246,6 +246,36 @@ class AppProductSerializer(serializers.ModelSerializer):
         logger.info(f"[AppProductSerializer INFO] Total ProductImages successfully linked to product {product.id}: {created_images_count}")
         
         return product
+    
+    def update(self, instance, validated_data):
+        # 1. Panggil metode update dari parent class untuk menyimpan field standar
+        # seperti 'name', 'price', dll.
+        instance = super().update(instance, validated_data)
+
+        # 2. Ambil data dari context request
+        request = self.context.get('request')
+        if not request:
+            return instance # Tidak bisa melakukan apa-apa tanpa request
+
+        # 3. Logika untuk MENGHAPUS gambar yang ada
+        # Kita harapkan frontend mengirim daftar ID gambar yang akan dihapus
+        # dengan kunci 'images_to_delete'
+        images_to_delete_ids = request.data.getlist('images_to_delete')
+        if images_to_delete_ids:
+            # Hapus hanya gambar yang dimiliki oleh produk ini untuk keamanan
+            ProductImage.objects.filter(id__in=images_to_delete_ids, product=instance).delete()
+            print(f"[AppProductSerializer INFO] Deleted images with IDs: {images_to_delete_ids} for product {instance.id}")
+
+        # 4. Logika untuk MENAMBAH gambar baru
+        # Logika ini sama persis dengan yang ada di metode 'create'
+        image_files = request.FILES.getlist('images')
+        if image_files:
+            print(f"[AppProductSerializer INFO] Adding {len(image_files)} new images for product {instance.id}")
+            for image_file_data in image_files:
+                ProductImage.objects.create(product=instance, image=image_file_data)
+        
+        instance.save()
+        return instance
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)

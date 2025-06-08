@@ -15,11 +15,13 @@ export interface ProductFormData {
   images: File[]; // Hanya untuk file BARU yang akan diunggah
 }
 
+// --- PERUBAHAN 1: Menambahkan prop 'onDeleteExistingImage' ke interface ---
 interface ProductFormProps {
   onSubmit: (data: ProductFormData) => Promise<void>;
   initialData?: AppProduct | null;
   isSubmitting: boolean;
   submitButtonText?: string;
+  onDeleteExistingImage?: (id: string) => void; // Prop untuk menangani hapus gambar
 }
 
 const ProductForm: React.FC<ProductFormProps> = ({
@@ -27,6 +29,8 @@ const ProductForm: React.FC<ProductFormProps> = ({
   initialData,
   isSubmitting,
   submitButtonText = "Submit Product",
+  // --- PERUBAHAN 2: Menerima prop 'onDeleteExistingImage' ---
+  onDeleteExistingImage,
 }) => {
   // State untuk data teks dalam form
   const [formData, setFormData] = useState({
@@ -65,29 +69,32 @@ const ProductForm: React.FC<ProductFormProps> = ({
   }, []);
 
   useEffect(() => {
-    if (!initialData || apiCategories.length === 0) {
+    // Cek ini dimodifikasi untuk memastikan `initialData` tidak null atau undefined
+    if (!initialData) {
+      // Jika tidak ada initialData (mode 'create'), pastikan form kosong
+      setFormData({ name: '', description: '', price: '', category_id: '', available: true });
+      setExistingImages([]);
       return;
     }
-
-    // --- PERBAIKAN KRUSIAL ---
-    // Sekarang kita menggunakan `initialData.category_name` yang dikirim dari parent.
-    const productCategoryName = initialData.category_name || '';
-    let foundCategoryId = '';
     
-    // Jika ada nama kategori, cari objek kategori yang cocok di dalam daftar API.
-    if (productCategoryName) {
-      const foundCategory = apiCategories.find(cat => cat.name === productCategoryName);
+    // Logika untuk mengisi form saat mengedit
+    let foundCategoryId = '';
+    // Hanya cari kategori jika apiCategories sudah dimuat
+    if (apiCategories.length > 0 && initialData.category_name) {
+      const foundCategory = apiCategories.find(cat => cat.name === initialData.category_name);
       if (foundCategory) {
-        // Jika ditemukan, kita ambil ID-nya.
         foundCategoryId = String(foundCategory.id);
       }
+    } else if (initialData.category) { 
+        // Fallback jika category_name tidak ada tapi category (ID) ada
+        foundCategoryId = String(initialData.category);
     }
 
     setFormData({
       name: initialData.name || '',
       description: initialData.description || '',
       price: String(initialData.price) || '',
-      category_id: foundCategoryId, // <- Set ID yang ditemukan
+      category_id: foundCategoryId,
       available: initialData.available !== undefined ? initialData.available : true,
     });
 
@@ -143,8 +150,13 @@ const ProductForm: React.FC<ProductFormProps> = ({
     setImagePreviews(prev => prev.filter((_, i) => i !== indexToRemove));
   };
   
-  const removeExistingImage = (idToRemove: number | string) => {
-    setExistingImages(prev => prev.filter(img => img.id !== idToRemove));
+  // --- PERUBAHAN 3: Memperbaiki logika 'removeExistingImage' ---
+  const removeExistingImage = (idToRemove: string) => {
+    // Panggil fungsi yang di-pass dari parent component (EditProductPage)
+    // Pastikan prop tersebut ada sebelum memanggilnya
+    if (onDeleteExistingImage) {
+      onDeleteExistingImage(idToRemove);
+    }
   };
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
@@ -166,12 +178,12 @@ const ProductForm: React.FC<ProductFormProps> = ({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
-       {formErrors.general && (
-        <div className="p-3 mb-4 bg-red-100 text-red-700 border border-red-300 rounded-md flex items-center">
-            <AlertTriangle size={20} className="mr-2 text-red-600 flex-shrink-0" />
-            <span>{formErrors.general}</span>
-        </div>
-      )}
+        {formErrors.general && (
+         <div className="p-3 mb-4 bg-red-100 text-red-700 border border-red-300 rounded-md flex items-center">
+             <AlertTriangle size={20} className="mr-2 text-red-600 flex-shrink-0" />
+             <span>{formErrors.general}</span>
+         </div>
+       )}
       <div>
         <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">Product Name <span className="text-red-500">*</span></label>
         <input type="text" name="name" id="name" value={formData.name} onChange={handleInputChange} 
@@ -219,12 +231,13 @@ const ProductForm: React.FC<ProductFormProps> = ({
                 />
                 <button
                   type="button"
-                  onClick={() => removeExistingImage(image.id)}
-                  className="absolute top-1 right-1 bg-red-600 text-white rounded-full p-0.5 opacity-50 group-hover:opacity-100 transition-opacity"
+                  // --- PERUBAHAN 4: Memastikan onClick memanggil fungsi yang sudah diperbaiki ---
+                  onClick={() => removeExistingImage(String(image.id))}
+                  className="absolute top-1 right-1 bg-red-600 text-white rounded-full p-1 opacity-50 group-hover:opacity-100 transition-opacity flex items-center justify-center"
                   aria-label="Remove existing image"
                   disabled={isSubmitting}
                 >
-                  <Trash2 size={16} />
+                  <Trash2 size={14} />
                 </button>
             </div>
           ))}
@@ -234,11 +247,11 @@ const ProductForm: React.FC<ProductFormProps> = ({
                 <button
                   type="button"
                   onClick={() => removeNewImage(index)}
-                  className="absolute top-1 right-1 bg-red-600 text-white rounded-full p-0.5 opacity-50 group-hover:opacity-100 transition-opacity"
+                  className="absolute top-1 right-1 bg-red-600 text-white rounded-full p-1 opacity-50 group-hover:opacity-100 transition-opacity flex items-center justify-center"
                   aria-label="Remove new image"
                   disabled={isSubmitting}
                 >
-                  <X size={18} />
+                  <X size={16} />
                 </button>
             </div>
           ))}
